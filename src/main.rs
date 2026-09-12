@@ -1,3 +1,16 @@
+use std::io;
+
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::{
+  buffer::Buffer,
+  layout::Rect,
+  style::Stylize,
+  symbols::border,
+  text::{Line, Text},
+  widgets::{Block, BorderType, Paragraph, Widget},
+  DefaultTerminal, Frame,
+};
+
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::{distr::Alphanumeric, RngExt};
 use serde::Deserialize;
@@ -186,7 +199,7 @@ fn get_access_token(
   Ok(token.access_token)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Default, Debug, Deserialize)]
 struct Player {
   device: Option<Device>,
   is_playing: bool,
@@ -194,7 +207,7 @@ struct Player {
   shuffle_state: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Default, Debug, Deserialize)]
 struct Device {
   id: String,
   name: String,
@@ -349,28 +362,144 @@ impl Player {
       .bearer_auth(access_token)
       .send()?;
 
-    let status = response.status();
-    let text = response.text()?;
-
-    println!("Response: {}", text);
-
-    if status == reqwest::StatusCode::OK {
-      let playing: Playing = serde_json::from_str(&text)?;
-
-      println!("Playing: {:?}", playing);
-
-      return playing
-        .item
-        .ok_or_else(|| "No currently playing track".into());
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err("Nothing is currently playing".into());
     }
-    
-    Err("No currently playing track".into())
+
+    let playing: Playing = response
+      .error_for_status()?
+      .json()?;
+
+    playing
+      .item
+      .ok_or_else(|| "No currently playing track".into())
   }
 
   fn device(&self) -> Result<&Device, Error> {
     self.device
       .as_ref()
       .ok_or("No Spotify device found".into())
+  }
+}
+
+#[derive(Debug, Default)]
+pub struct App {
+  client: reqwest::blocking::Client,
+  access_token: String,
+  player: Player,
+  track: Option<Track>,
+  error: Option<String>,
+  exit: bool,
+}
+
+impl App {
+  fn new(
+    client: reqwest::blocking::Client,
+    access_token: String,
+    player: Player,
+  ) -> Self {
+    Self {
+      client,
+      access_token,
+      player,
+      track: None,
+      error: None,
+      exit: false,
+    }
+  }
+
+  /// runs the application's main loop until the user quits
+  pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    while !self.exit {
+      terminal.draw(|frame| self.draw(frame))?;
+      self.handle_events()?;
+    }
+    Ok(())
+  }
+
+  fn update_track(&mut self) {
+    match self.player.get_track(
+      &self.client,
+      &self.access_token,
+    ) {
+      Ok(track) => {
+        self.track = Some(track);
+        self.error = None;
+      }
+      Err(error) => {
+        self.error = Some(error.to_string());
+      }
+    }
+  }
+
+  fn draw(&self, frame: &mut Frame) {
+    frame.render_widget(self, frame.area());
+  }
+
+  fn exit(&mut self) {
+    self.exit = true;
+  }
+
+  fn handle_key_event(&mut self, key_event: KeyEvent) {
+    match key_event.code {
+      KeyCode::Char('q') => self.exit(),
+      KeyCode::Char('r') => self.update_track(),
+      _ => {}
+    }
+  }
+
+  /// updates the application's state based on user input
+  fn handle_events(&mut self) -> io::Result<()> {
+    match event::read()? {
+      // it's important to check that the event is a key press event as
+      // crossterm also emits key release and repeat events on Windows.
+      Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
+        self.handle_key_event(key_event)
+      }
+      _ => {}
+    };
+    Ok(())
+  }
+}
+
+impl Widget for &App {
+  fn render(self, area: Rect, buf: &mut Buffer) {
+    let title = Line::from(" Spotify ".bold());
+
+    let instructions = Line::from(vec![
+      " Quit ".into(),
+      "<Q>".blue().bold(),
+      " Refresh ".into(),
+      "<R>".blue().bold(),
+    ]);
+
+    let block = Block::bordered()
+      .title(title.centered())
+      .title_bottom(instructions.centered())
+      .border_type(BorderType::Double);
+
+    let track_text = match &self.track {
+      Some(track) => {
+        let artists = track
+          .artists
+          .iter()
+          .map(|artist| artist.name.as_str())
+          .collect::<Vec<_>>()
+          .join(", ");
+
+        Text::from(vec![
+          Line::from(track.name.clone().bold()),
+          Line::from(artists),
+        ])
+      }
+
+      None => Text::from("Nothing playing"),
+    };
+
+    Paragraph::new(track_text)
+      .centered()
+      .block(block)
+      .render(area, buf);
   }
 }
 
@@ -385,17 +514,18 @@ fn main() -> Result<(), Error> {
     &client_id,
   )?;
 
-  let mut player = Player::get(
+  let player = Player::get(
     &client,
     &access_token,
   )?;
 
-  let track = player.get_track(
-    &client,
-    &access_token,
-  )?;
+  let mut app = App::new(
+    client,
+    access_token,
+    player,
+  );
 
-  println!("Track : {}", track.name);
+  ratatui::run(|terminal| app.run(terminal))?;
 
   Ok(())
 }
