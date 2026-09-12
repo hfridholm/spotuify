@@ -1,13 +1,15 @@
 use std::io;
 
+use std::{thread, time::Duration};
+
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
   buffer::Buffer,
-  layout::Rect,
+  layout::{Constraint, Layout, Rect},
   style::Stylize,
   symbols::border,
   text::{Line, Text},
-  widgets::{Block, BorderType, Paragraph, Widget},
+  widgets::{Block, BorderType, Paragraph, Wrap, Widget},
   DefaultTerminal, Frame,
 };
 
@@ -25,9 +27,9 @@ const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 
 #[derive(Debug, Deserialize)]
 struct SpotifyToken {
-  access_token: String,
-  scope: String,
-  expires_in: u64,
+  access_token:  String,
+  scope:         String,
+  expires_in:    u64,
   refresh_token: Option<String>,
 }
 
@@ -64,8 +66,6 @@ fn build_authorization_url(
 
 fn wait_for_callback() -> Result<String, Error> {
   let server = Server::http("127.0.0.1:8888")?;
-
-  println!("Waiting for Spotify callback...");
 
   let request = server.recv()?;
 
@@ -134,8 +134,6 @@ fn get_access_token(
 
   // Try existing refresh token first.
   if let Ok(refresh_token) = std::fs::read_to_string(token_path) {
-    println!("Refreshing Spotify access token...");
-
     let token = refresh_access_token(
       client,
       client_id,
@@ -151,8 +149,6 @@ fn get_access_token(
   }
 
   // No refresh token: perform initial authorization.
-  println!("No Spotify credentials found.");
-  println!("Starting Spotify authorization...");
 
   // 1. Generate PKCE values
   let verifier = generate_code_verifier();
@@ -165,9 +161,6 @@ fn get_access_token(
   );
 
   // 3. Start callback server BEFORE opening browser
-  println!("Open this URL in your browser:");
-  println!("{auth_url}");
-
   // Try to open the browser automatically.
   if let Err(error) = open::that(&auth_url) {
     eprintln!("Could not open browser automatically: {error}");
@@ -176,8 +169,6 @@ fn get_access_token(
   // 4. Wait for Spotify to redirect back to us
   let code = wait_for_callback()?;
 
-  println!("Received authorization code.");
-
   // 5. Exchange code for access token
   let token = exchange_code(
     &client,
@@ -185,10 +176,6 @@ fn get_access_token(
     &code,
     &verifier,
   )?;
-
-  println!("Access token obtained!");
-  println!("Expires in: {} seconds", token.expires_in);
-  println!("Scopes: {}", token.scope);
 
   let refresh_token = token
     .refresh_token
@@ -200,19 +187,29 @@ fn get_access_token(
 }
 
 #[derive(Default, Debug, Deserialize)]
+struct Spotify {
+  #[serde(skip)]
+  client:       reqwest::blocking::Client,
+  access_token: String,
+  player:       Player,
+  track:        Option<Track>,
+  queue:        Option<Queue>,
+}
+
+#[derive(Default, Debug, Deserialize)]
 struct Player {
-  device: Option<Device>,
-  is_playing: bool,
-  repeat_state: String,
+  device:        Option<Device>,
+  is_playing:    bool,
+  repeat_state:  String,
   shuffle_state: bool,
 }
 
 #[derive(Default, Debug, Deserialize)]
 struct Device {
-  id: String,
-  name: String,
+  id:             String,
+  name:           String,
   volume_percent: u8,
-  is_active: bool,
+  is_active:      bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -220,17 +217,104 @@ struct Playing {
   item: Option<Track>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Default, Debug, Deserialize)]
+struct Queue {
+  currently_playing: Option<Track>,
+  queue:             Vec<Track>,
+}
+
+#[derive(Default, Debug, Deserialize)]
 struct Track {
-  id: String,
-  name: String,
+  id:      String,
+  name:    String,
   artists: Vec<Artist>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Default, Debug, Deserialize)]
 struct Artist {
-  id: String,
+  id:   String,
   name: String,
+}
+
+impl Spotify {
+  fn new() -> Result<Self, Error> {
+    let client_id = env::var("CLIENT_ID")?;
+    let client = reqwest::blocking::Client::new();
+
+    let access_token = get_access_token(
+      &client,
+      &client_id,
+    )?;
+
+    let player = Player::get(
+      &client,
+      &access_token,
+    )?;
+
+    Ok(Self {
+      client:       client,
+      access_token: access_token,
+      player:       player,
+      track:        None,
+      queue:        None,
+    })
+  }
+
+  fn update_track(&mut self) -> Result<(), Error> {
+    let track = self.player.get_track(
+      &self.client,
+      &self.access_token,
+    )?;
+
+    self.track = Some(track);
+
+    Ok(())
+  }
+
+  fn update_queue(&mut self) -> Result<(), Error> {
+    let queue = self.player.get_queue(
+      &self.client,
+      &self.access_token,
+    )?;
+
+    self.queue = Some(queue);
+
+    Ok(())
+  }
+
+  fn resume(&mut self) -> Result<(), Error> {
+    self.player.resume(&self.client, &self.access_token)
+  }
+
+  fn pause(&mut self) -> Result<(), Error> {
+    self.player.pause(&self.client, &self.access_token)
+  }
+
+  fn next(&mut self) -> Result<(), Error> {
+    self.player.next(&self.client, &self.access_token)?;
+
+    // Need to wait for the next track to start, before reading it
+    thread::sleep(Duration::from_millis(500));
+
+    self.update_track()
+  }
+
+  fn prev(&mut self) -> Result<(), Error> {
+    self.player.prev(&self.client, &self.access_token)?;
+
+    // Need to wait for the next track to start, before reading it
+    thread::sleep(Duration::from_millis(500));
+
+    self.update_track()
+  }
+
+  fn toggle_repeat(&mut self) -> Result<(), Error> {
+    self.player.toggle_repeat(&self.client, &self.access_token)
+  }
+
+  fn toggle_shuffle(&mut self) -> Result<(), Error> {
+    self.player.toggle_shuffle(&self.client, &self.access_token)
+  }
 }
 
 impl Player {
@@ -250,20 +334,49 @@ impl Player {
     Ok(response.error_for_status()?.json()?)
   }
 
+  fn get_queue(
+    &mut self,
+    client: &reqwest::blocking::Client,
+    access_token: &str,
+  ) -> Result<Queue, Error> {
+    let response = client
+      .get("https://api.spotify.com/v1/me/player/queue")
+      .bearer_auth(access_token)
+      .send()?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err("Queue is empty".into());
+    }
+
+    let queue: Queue = response
+      .error_for_status()?
+      .json()?;
+
+    Ok(queue)
+  }
+
   fn resume(
-    &self,
+    &mut self,
     client: &reqwest::blocking::Client,
     access_token: &str,
   ) -> Result<(), Error> {
-    self.put(client, access_token, "https://api.spotify.com/v1/me/player/play")
+    self.put(client, access_token, "https://api.spotify.com/v1/me/player/play")?;
+
+    self.is_playing = true;
+
+    Ok(())
   }
 
   fn pause(
-    &self,
+    &mut self,
     client: &reqwest::blocking::Client,
     access_token: &str,
   ) -> Result<(), Error> {
-    self.put(client, access_token, "https://api.spotify.com/v1/me/player/pause")
+    self.put(client, access_token, "https://api.spotify.com/v1/me/player/pause")?;
+
+    self.is_playing = false;
+
+    Ok(())
   }
 
   fn next(
@@ -271,7 +384,7 @@ impl Player {
     client: &reqwest::blocking::Client,
     access_token: &str,
   ) -> Result<(), Error> {
-    self.put(client, access_token, "https://api.spotify.com/v1/me/player/next")
+    self.post(client, access_token, "https://api.spotify.com/v1/me/player/next")
   }
 
   fn prev(
@@ -279,7 +392,7 @@ impl Player {
     client: &reqwest::blocking::Client,
     access_token: &str,
   ) -> Result<(), Error> {
-    self.put(client, access_token, "https://api.spotify.com/v1/me/player/previous")
+    self.post(client, access_token, "https://api.spotify.com/v1/me/player/previous")
   }
 
   fn put(
@@ -300,7 +413,25 @@ impl Player {
     Ok(())
   }
 
-  fn switch_shuffle(
+  fn post(
+    &self,
+    client: &reqwest::blocking::Client,
+    access_token: &str,
+    url: &str,
+  ) -> Result<(), Error> {
+    let device = self.device()?;
+
+    client
+      .post(url)
+      .query(&[("device_id", device.id.as_str())])
+      .bearer_auth(access_token)
+      .send()?
+      .error_for_status()?;
+
+    Ok(())
+  }
+
+  fn toggle_shuffle(
     &mut self,
     client: &reqwest::blocking::Client,
     access_token: &str,
@@ -324,7 +455,7 @@ impl Player {
     Ok(())
   }
 
-  fn switch_repeat(
+  fn toggle_repeat(
     &mut self,
     client: &reqwest::blocking::Client,
     access_token: &str,
@@ -384,52 +515,29 @@ impl Player {
 
 #[derive(Debug, Default)]
 pub struct App {
-  client: reqwest::blocking::Client,
-  access_token: String,
-  player: Player,
-  track: Option<Track>,
-  error: Option<String>,
-  exit: bool,
+  spotify: Spotify,
+  error:   Option<String>,
+  exit:    bool,
 }
 
 impl App {
-  fn new(
-    client: reqwest::blocking::Client,
-    access_token: String,
-    player: Player,
-  ) -> Self {
-    Self {
-      client,
-      access_token,
-      player,
-      track: None,
-      error: None,
-      exit: false,
-    }
+  fn new() -> Result<Self, Error> {
+    let spotify = Spotify::new()?;
+
+    Ok(Self {
+      spotify: spotify,
+      error:   None,
+      exit:    false,
+    })
   }
 
-  /// runs the application's main loop until the user quits
+  // runs the application's main loop until the user quits
   pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
     while !self.exit {
       terminal.draw(|frame| self.draw(frame))?;
       self.handle_events()?;
     }
     Ok(())
-  }
-
-  fn update_track(&mut self) {
-    match self.player.get_track(
-      &self.client,
-      &self.access_token,
-    ) {
-      Ok(track) => {
-        self.track = Some(track);
-        self.error = None;
-      }
-      Err(error) => {
-        self.error = Some(error.to_string());
-      }
-    }
   }
 
   fn draw(&self, frame: &mut Frame) {
@@ -443,7 +551,42 @@ impl App {
   fn handle_key_event(&mut self, key_event: KeyEvent) {
     match key_event.code {
       KeyCode::Char('q') => self.exit(),
-      KeyCode::Char('r') => self.update_track(),
+      KeyCode::Enter => {
+        if let Err(err) = self.spotify.update_track() {
+          self.error = Some(err.to_string());
+        }
+
+        if let Err(err) = self.spotify.update_queue() {
+          self.error = Some(err.to_string());
+        }
+      },
+      KeyCode::Char(' ') => {
+        if self.spotify.player.is_playing {
+          self.spotify.pause();
+        } else {
+          self.spotify.resume();
+        }
+      },
+      KeyCode::Char('l') => {
+        if let Err(err) = self.spotify.next() {
+          self.error = Some(err.to_string());
+        }
+      },
+      KeyCode::Char('h') => {
+        if let Err(err) = self.spotify.prev() {
+          self.error = Some(err.to_string());
+        }
+      },
+      KeyCode::Char('s') => {
+        if let Err(err) = self.spotify.toggle_shuffle() {
+          self.error = Some(err.to_string());
+        }
+      },
+      KeyCode::Char('r') => {
+        if let Err(err) = self.spotify.toggle_repeat() {
+          self.error = Some(err.to_string());
+        }
+      },
       _ => {}
     }
   }
@@ -462,23 +605,59 @@ impl App {
   }
 }
 
+// Render
 impl Widget for &App {
   fn render(self, area: Rect, buf: &mut Buffer) {
-    let title = Line::from(" Spotify ".bold());
+    let [player_area, queue_area, instructions_area, error_area] = Layout::vertical([
+      Constraint::Min(1),
+      Constraint::Min(1),
+      Constraint::Length(2),
+      Constraint::Length(3),
+    ])
+      .margin(1)
+      .areas(area);
 
-    let instructions = Line::from(vec![
-      " Quit ".into(),
-      "<Q>".blue().bold(),
-      " Refresh ".into(),
-      "<R>".blue().bold(),
-    ]);
+    // Instructions
+    let instructions = Line::from(
+    "_ Pause/Resume | r Refresh | h,<- Previous | l,-> Next | s Toggle Shuffle | r Toggle Repeat"
+      .blue());
 
-    let block = Block::bordered()
-      .title(title.centered())
-      .title_bottom(instructions.centered())
-      .border_type(BorderType::Double);
+    // Error
+    let error = Line::from(
+      self.error
+      .as_deref()
+      .unwrap_or("")
+      .red(),
+    );
 
-    let track_text = match &self.track {
+    // Queue block
+    let queue_block = Block::bordered()
+      .title(Line::from(" Queue ".bold()).left_aligned())
+      .border_type(BorderType::Thick)
+      .white();
+
+    // Queue text
+    let queue_text = match &self.spotify.queue {
+      Some(queue) => {
+        let tracks = queue.queue
+          .iter()
+          .map(|track| track.name.as_str())
+          .collect::<Vec<_>>()
+          .join("\n");
+
+        Text::from(tracks)
+      }
+      None => Text::from("No queue"),
+    }
+      .white();
+
+    // Player block
+    let player_block = Block::bordered()
+      .title(Line::from(" Player ".bold()).left_aligned())
+      .border_type(BorderType::Thick)
+      .green();
+
+    let track_text = match &self.spotify.track {
       Some(track) => {
         let artists = track
           .artists
@@ -492,38 +671,36 @@ impl Widget for &App {
           Line::from(artists),
         ])
       }
-
       None => Text::from("Nothing playing"),
-    };
+    }
+      .white();
 
     Paragraph::new(track_text)
       .centered()
-      .block(block)
-      .render(area, buf);
+      .block(player_block)
+      .render(player_area, buf);
+
+    Paragraph::new(queue_text)
+      .centered()
+      .block(queue_block)
+      .render(queue_area, buf);
+
+    Paragraph::new(instructions)
+      .centered()
+      .wrap(Wrap { trim: true })
+      .render(instructions_area, buf);
+
+    Paragraph::new(error)
+      .wrap(Wrap { trim: true })
+      .render(error_area, buf);
   }
 }
 
+// Main
 fn main() -> Result<(), Error> {
   dotenvy::dotenv().ok();
 
-  let client_id = env::var("CLIENT_ID")?;
-  let client = reqwest::blocking::Client::new();
-
-  let access_token = get_access_token(
-    &client,
-    &client_id,
-  )?;
-
-  let player = Player::get(
-    &client,
-    &access_token,
-  )?;
-
-  let mut app = App::new(
-    client,
-    access_token,
-    player,
-  );
+  let mut app = App::new()?;
 
   ratatui::run(|terminal| app.run(terminal))?;
 
