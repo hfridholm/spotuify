@@ -56,7 +56,7 @@ fn build_authorization_url(
   url.query_pairs_mut()
     .append_pair("response_type", "code")
     .append_pair("client_id", client_id)
-    .append_pair("scope", "user-modify-playback-state")
+    .append_pair("scope", "user-modify-playback-state user-read-recently-played")
     .append_pair("code_challenge_method", "S256")
     .append_pair("code_challenge", challenge)
     .append_pair("redirect_uri", REDIRECT_URI);
@@ -194,6 +194,7 @@ struct Spotify {
   player:       Player,
   track:        Option<Track>,
   queue:        Option<Queue>,
+  history:      Option<History>,
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -215,6 +216,17 @@ struct Device {
 #[derive(Debug, Deserialize)]
 struct Playing {
   item: Option<Track>,
+}
+
+#[derive(Default, Debug, Deserialize)]
+struct History {
+  items: Vec<PlayedTrack>,
+}
+
+#[derive(Default, Debug, Deserialize)]
+struct PlayedTrack {
+  track:     Option<Track>,
+  played_at: String,
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -257,7 +269,14 @@ impl Spotify {
       player:       player,
       track:        None,
       queue:        None,
+      history:      None,
     })
+  }
+
+  fn update(&mut self) -> Result<(), Error> {
+    self.update_track()?;
+    self.update_queue()?;
+    self.update_history()
   }
 
   fn update_track(&mut self) -> Result<(), Error> {
@@ -282,6 +301,17 @@ impl Spotify {
     Ok(())
   }
 
+  fn update_history(&mut self) -> Result<(), Error> {
+    let history = self.player.get_history(
+      &self.client,
+      &self.access_token,
+    )?;
+
+    self.history = Some(history);
+
+    Ok(())
+  }
+
   fn resume(&mut self) -> Result<(), Error> {
     self.player.resume(&self.client, &self.access_token)
   }
@@ -296,7 +326,7 @@ impl Spotify {
     // Need to wait for the next track to start, before reading it
     thread::sleep(Duration::from_millis(500));
 
-    self.update_track()
+    self.update()
   }
 
   fn prev(&mut self) -> Result<(), Error> {
@@ -305,7 +335,7 @@ impl Spotify {
     // Need to wait for the next track to start, before reading it
     thread::sleep(Duration::from_millis(500));
 
-    self.update_track()
+    self.update()
   }
 
   fn toggle_repeat(&mut self) -> Result<(), Error> {
@@ -353,6 +383,27 @@ impl Player {
       .json()?;
 
     Ok(queue)
+  }
+
+  fn get_history(
+    &mut self,
+    client: &reqwest::blocking::Client,
+    access_token: &str,
+  ) -> Result<History, Error> {
+    let response = client
+      .get("https://api.spotify.com/v1/me/player/recently-played")
+      .bearer_auth(access_token)
+      .send()?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err("No recently played tracks".into());
+    }
+
+    let history: History = response
+      .error_for_status()?
+      .json()?;
+
+    Ok(history)
   }
 
   fn resume(
@@ -552,19 +603,19 @@ impl App {
     match key_event.code {
       KeyCode::Char('q') => self.exit(),
       KeyCode::Enter => {
-        if let Err(err) = self.spotify.update_track() {
-          self.error = Some(err.to_string());
-        }
-
-        if let Err(err) = self.spotify.update_queue() {
+        if let Err(err) = self.spotify.update() {
           self.error = Some(err.to_string());
         }
       },
       KeyCode::Char(' ') => {
         if self.spotify.player.is_playing {
-          self.spotify.pause();
+          if let Err(err) = self.spotify.pause() {
+            self.error = Some(err.to_string());
+          }
         } else {
-          self.spotify.resume();
+          if let Err(err) = self.spotify.resume() {
+            self.error = Some(err.to_string());
+          }
         }
       },
       KeyCode::Char('l') => {
@@ -608,7 +659,8 @@ impl App {
 // Render
 impl Widget for &App {
   fn render(self, area: Rect, buf: &mut Buffer) {
-    let [player_area, queue_area, instructions_area, error_area] = Layout::vertical([
+    let [player_area, queue_area, history_area, instructions_area, error_area] = Layout::vertical([
+      Constraint::Min(1),
       Constraint::Min(1),
       Constraint::Min(1),
       Constraint::Length(2),
@@ -634,6 +686,29 @@ impl Widget for &App {
     let queue_block = Block::bordered()
       .title(Line::from(" Queue ".bold()).left_aligned())
       .border_type(BorderType::Thick)
+      .white();
+
+    // History block
+    let history_block = Block::bordered()
+      .title(Line::from(" History ".bold()).left_aligned())
+      .border_type(BorderType::Thick)
+      .white();
+
+    // History text
+    let history_text = match &self.spotify.history {
+      Some(history) => {
+        let tracks = history.items
+          .iter()
+          .filter_map(|played_track| {
+            played_track.track.as_ref().map(|track| track.name.as_str())
+          })
+          .collect::<Vec<_>>()
+          .join("\n");
+
+        Text::from(tracks)
+      }
+      None => Text::from("No history"),
+    }
       .white();
 
     // Queue text
@@ -684,6 +759,11 @@ impl Widget for &App {
       .centered()
       .block(queue_block)
       .render(queue_area, buf);
+
+    Paragraph::new(history_text)
+      .centered()
+      .block(history_block)
+      .render(history_area, buf);
 
     Paragraph::new(instructions)
       .centered()
