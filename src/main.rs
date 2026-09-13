@@ -1,15 +1,18 @@
 use std::io;
 
 use std::{thread, time::Duration};
+use chrono::{DateTime, Utc};
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::{
   buffer::Buffer,
   layout::{Constraint, Layout, Rect},
-  style::Stylize,
+  style::{Stylize, Color},
   symbols::border,
   text::{Line, Text},
-  widgets::{Block, BorderType, Paragraph, Wrap, Widget},
+  widgets::{
+    Block, BorderType, Cell, Paragraph, Row, Table, Widget, Wrap,
+  },
   DefaultTerminal, Frame,
 };
 
@@ -192,7 +195,7 @@ struct Spotify {
   client:       reqwest::blocking::Client,
   access_token: String,
   player:       Player,
-  track:        Option<Track>,
+  playing:      Option<Playing>,
   queue:        Option<Queue>,
   history:      Option<History>,
 }
@@ -215,7 +218,22 @@ struct Device {
 
 #[derive(Debug, Deserialize)]
 struct Playing {
-  item: Option<Track>,
+  device:      Option<Device>,
+  progress_ms: u32,
+  item:        Option<Track>,
+}
+
+impl Playing {
+  fn get_remaining(&self) -> u32 {
+    let progress_ms = self.progress_ms;
+
+    let duration_ms = self.item
+      .as_ref()
+      .map(|track| track.duration_ms)
+      .unwrap_or(0);
+
+    duration_ms.saturating_sub(progress_ms)
+  }
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -229,6 +247,29 @@ struct PlayedTrack {
   played_at: String,
 }
 
+impl PlayedTrack {
+  fn get_elapsed(&self) -> u32{
+    let then = DateTime::parse_from_rfc3339(&self.played_at)
+      .unwrap()
+      .with_timezone(&Utc);
+
+    let now = Utc::now();
+    let elapsed = now.signed_duration_since(then);
+
+    elapsed.num_milliseconds() as u32
+  }
+}
+
+fn format_ms(ms: u32) -> String {
+  let sec = (ms / 1000) % 60;
+  let min = (ms / 1000) / 60;
+
+  let sec_str = sec.to_string();
+  let min_str = min.to_string();
+
+  format!("{:>2}m {:0>2}s", min_str, sec_str)
+}
+
 #[derive(Default, Debug, Deserialize)]
 struct Queue {
   currently_playing: Option<Track>,
@@ -237,9 +278,10 @@ struct Queue {
 
 #[derive(Default, Debug, Deserialize)]
 struct Track {
-  id:      String,
-  name:    String,
-  artists: Vec<Artist>,
+  id:          String,
+  name:        String,
+  duration_ms: u32,
+  artists:     Vec<Artist>,
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -267,25 +309,25 @@ impl Spotify {
       client:       client,
       access_token: access_token,
       player:       player,
-      track:        None,
+      playing:      None,
       queue:        None,
       history:      None,
     })
   }
 
   fn update(&mut self) -> Result<(), Error> {
-    self.update_track()?;
+    self.update_playing()?;
     self.update_queue()?;
     self.update_history()
   }
 
-  fn update_track(&mut self) -> Result<(), Error> {
-    let track = self.player.get_track(
+  fn update_playing(&mut self) -> Result<(), Error> {
+    let playing = self.player.get_playing(
       &self.client,
       &self.access_token,
     )?;
 
-    self.track = Some(track);
+    self.playing = Some(playing);
 
     Ok(())
   }
@@ -534,11 +576,11 @@ impl Player {
     Ok(())
   }
 
-  fn get_track(
+  fn get_playing(
     &self,
     client: &reqwest::blocking::Client,
     access_token: &str,
-  ) -> Result<Track, Error> {
+  ) -> Result<Playing, Error> {
     let response = client
       .get("https://api.spotify.com/v1/me/player/currently-playing")
       .bearer_auth(access_token)
@@ -548,13 +590,7 @@ impl Player {
       return Err("Nothing is currently playing".into());
     }
 
-    let playing: Playing = response
-      .error_for_status()?
-      .json()?;
-
-    playing
-      .item
-      .ok_or_else(|| "No currently playing track".into())
+    Ok(response.error_for_status()?.json()?)
   }
 
   fn device(&self) -> Result<&Device, Error> {
@@ -654,125 +690,226 @@ impl App {
     };
     Ok(())
   }
-}
 
-// Render
-impl Widget for &App {
-  fn render(self, area: Rect, buf: &mut Buffer) {
-    let [player_area, queue_area, history_area, instructions_area, error_area] = Layout::vertical([
-      Constraint::Min(1),
-      Constraint::Min(1),
-      Constraint::Min(1),
-      Constraint::Length(2),
-      Constraint::Length(3),
-    ])
-      .margin(1)
-      .areas(area);
+  fn render_player(&self, area: Rect, buf: &mut Buffer) {
+    let block = Self::panel(" Player ", Color::Green);
 
-    // Instructions
-    let instructions = Line::from(
-    "_ Pause/Resume | r Refresh | h,<- Previous | l,-> Next | s Toggle Shuffle | r Toggle Repeat"
-      .blue());
+    let text = match &self.spotify.playing {
+      Some(playing) => {
+        match &playing.item {
+          Some(track) => {
+            let artists = track
+              .artists
+              .iter()
+              .map(|artist| artist.name.as_str())
+              .collect::<Vec<_>>()
+              .join(", ");
 
-    // Error
-    let error = Line::from(
-      self.error
-      .as_deref()
-      .unwrap_or("")
-      .red(),
-    );
-
-    // Queue block
-    let queue_block = Block::bordered()
-      .title(Line::from(" Queue ".bold()).left_aligned())
-      .border_type(BorderType::Thick)
-      .white();
-
-    // History block
-    let history_block = Block::bordered()
-      .title(Line::from(" History ".bold()).left_aligned())
-      .border_type(BorderType::Thick)
-      .white();
-
-    // History text
-    let history_text = match &self.spotify.history {
-      Some(history) => {
-        let tracks = history.items
-          .iter()
-          .filter_map(|played_track| {
-            played_track.track.as_ref().map(|track| track.name.as_str())
-          })
-          .collect::<Vec<_>>()
-          .join("\n");
-
-        Text::from(tracks)
-      }
-      None => Text::from("No history"),
-    }
-      .white();
-
-    // Queue text
-    let queue_text = match &self.spotify.queue {
-      Some(queue) => {
-        let tracks = queue.queue
-          .iter()
-          .map(|track| track.name.as_str())
-          .collect::<Vec<_>>()
-          .join("\n");
-
-        Text::from(tracks)
-      }
-      None => Text::from("No queue"),
-    }
-      .white();
-
-    // Player block
-    let player_block = Block::bordered()
-      .title(Line::from(" Player ".bold()).left_aligned())
-      .border_type(BorderType::Thick)
-      .green();
-
-    let track_text = match &self.spotify.track {
-      Some(track) => {
-        let artists = track
-          .artists
-          .iter()
-          .map(|artist| artist.name.as_str())
-          .collect::<Vec<_>>()
-          .join(", ");
-
-        Text::from(vec![
-          Line::from(track.name.clone().bold()),
-          Line::from(artists),
-        ])
+            Text::from(vec![
+              Line::from(track.name.as_str().bold()),
+              Line::from(artists),
+            ])
+          }
+          None => Text::from("No track playing"),
+        }
       }
       None => Text::from("Nothing playing"),
+    };
+
+    Paragraph::new(text)
+      .centered()
+      .white()
+      .block(block)
+      .render(area, buf);
+  }
+
+  fn render_queue(&self, area: Rect, buf: &mut Buffer) {
+    let block = Self::panel(" Queue ", Color::White);
+
+    let header = Row::new([
+      Cell::from("  #".to_uppercase().cyan()),
+      Cell::from("Track".to_uppercase().cyan()),
+      Cell::from("Playing in".to_uppercase().cyan()),
+    ])
+      .bold();
+
+    let mut remaining_ms = self.spotify.playing
+      .as_ref()
+      .map(|playing| playing.get_remaining())
+      .unwrap_or(0);
+
+    let rows = match &self.spotify.queue {
+      Some(queue) if !queue.queue.is_empty() =>
+        queue.queue
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+          let time_str = format_ms(remaining_ms);
+
+          remaining_ms += track.duration_ms;
+
+          let order_str = (index + 1).to_string();
+
+          Row::new([
+            Cell::from(format!("+{:0>2}", order_str)),
+            Cell::from(track.name.as_str()),
+            Cell::from(time_str.clone()),
+          ])
+        })
+      .collect::<Vec<_>>(),
+
+      _ => vec![Row::new([
+        Cell::from(""),
+        Cell::from("No queue"),
+        Cell::from(""),
+      ])],
+    };
+
+    Table::new(
+      rows,
+      [
+      Constraint::Length(4),
+      Constraint::Min(1),
+      Constraint::Length(12),
+      ],
+    )
+      .header(header)
+      .column_spacing(1)
+      .block(block)
+      .render(area, buf);
     }
-      .white();
 
-    Paragraph::new(track_text)
-      .centered()
-      .block(player_block)
-      .render(player_area, buf);
+  fn render_history(&self, area: Rect, buf: &mut Buffer) {
+    let block = Self::panel(" History ", Color::White);
 
-    Paragraph::new(queue_text)
-      .centered()
-      .block(queue_block)
-      .render(queue_area, buf);
+    let header = Row::new([
+      Cell::from("  #".to_uppercase().cyan()),
+      Cell::from("Track".to_uppercase().cyan()),
+      Cell::from("Played ago".to_uppercase().cyan()),
+    ])
+      .bold();
 
-    Paragraph::new(history_text)
-      .centered()
-      .block(history_block)
-      .render(history_area, buf);
+    let rows = match &self.spotify.history {
+      Some(history) if !history.items.is_empty() => {
+        let items = history
+          .items
+          .iter()
+          .filter_map(|played_track| {
+            played_track
+              .track
+              .as_ref()
+              .map(|track| (played_track, track))
+          })
+        .enumerate()
+          .map(|(index, (played_track, track))| {
+            let order_str = (index + 1).to_string();
+
+            let time_str = format_ms(played_track.get_elapsed());
+
+            Row::new([
+              Cell::from(format!("-{:0>2}", order_str)),
+              Cell::from(track.name.as_str()),
+              Cell::from(time_str.clone()),
+            ])
+          })
+        .collect::<Vec<_>>();
+
+        if items.is_empty() {
+          vec![Row::new([
+            Cell::from(""),
+            Cell::from("No history"),
+            Cell::from(""),
+          ])]
+        } else {
+          items
+        }
+      }
+
+      _ => vec![Row::new([
+        Cell::from(""),
+        Cell::from("No history"),
+        Cell::from(""),
+      ])],
+    };
+
+    Table::new(
+      rows,
+      [
+      Constraint::Length(4),
+      Constraint::Min(1),
+      Constraint::Length(30),
+      ],
+    )
+      .header(header)
+      .column_spacing(1)
+      .block(block)
+      .render(area, buf);
+    }
+
+  fn queue_position(&self, index: usize) -> String {
+    // TODO: Replace this with the actual calculation once
+    // the Spotify track duration/playback fields are available.
+
+    if index == 0 {
+      "next".to_string()
+    } else {
+      format!("+{index}")
+    }
+  }
+
+  fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
+    let instructions = Line::from(
+      "_ Pause/Resume | r Refresh | h/← Previous | l/→ Next | \
+             s Toggle Shuffle | R Toggle Repeat",
+    )
+      .blue();
 
     Paragraph::new(instructions)
       .centered()
       .wrap(Wrap { trim: true })
-      .render(instructions_area, buf);
+      .render(area, buf);
+  }
 
-    Paragraph::new(error)
+  fn render_error(&self, area: Rect, buf: &mut Buffer) {
+    let error = self.error.as_deref().unwrap_or("").red();
+
+    Paragraph::new(Line::from(error))
       .wrap(Wrap { trim: true })
-      .render(error_area, buf);
+      .render(area, buf);
+  }
+
+  fn panel(title: &str, color: Color) -> Block<'static> {
+    Block::bordered()
+      .title(Line::from(format!(" {title} ").bold()).left_aligned())
+      .border_type(BorderType::Thick)
+      .fg(color)
+  }
+}
+
+impl Widget for &App {
+  fn render(self, area: Rect, buf: &mut Buffer) {
+    let [player_area, content_area, instructions_area, error_area] =
+      Layout::vertical([
+        Constraint::Length(5),
+        Constraint::Min(5),
+        Constraint::Length(2),
+        Constraint::Length(3),
+      ])
+      .margin(1)
+      .areas(area);
+
+    // Queue + history side-by-side.
+    let [queue_area, history_area] = Layout::horizontal([
+      Constraint::Percentage(60),
+      Constraint::Percentage(40),
+    ])
+      .areas(content_area);
+
+    self.render_player(player_area, buf);
+    self.render_queue(queue_area, buf);
+    self.render_history(history_area, buf);
+    self.render_instructions(instructions_area, buf);
+    self.render_error(error_area, buf);
   }
 }
 
