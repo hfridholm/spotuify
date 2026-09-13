@@ -10,7 +10,7 @@ use ratatui::{
   style::{Stylize, Style, Color},
   symbols::border,
   text::{Line, Text},
-  widgets::{Block, BorderType, Cell, Paragraph, Row, Table, Widget, Wrap, TableState, StatefulWidget},
+  widgets::{Block, BorderType, Cell, Paragraph, Row, Table, Widget, Wrap, TableState, StatefulWidget, LineGauge},
   DefaultTerminal, Frame,
 };
 
@@ -192,8 +192,8 @@ struct Spotify {
   #[serde(skip)]
   client:       reqwest::blocking::Client,
   access_token: String,
-  player:       Player,
-  playing:      Option<Playing>,
+  player:       Player, // Player doesn't need to be Option,
+                        // becuase if no player exists, the TUI can't be used
   queue:        Option<Queue>,
   history:      Option<History>,
 }
@@ -201,6 +201,9 @@ struct Spotify {
 #[derive(Default, Debug, Deserialize)]
 struct Player {
   device:        Option<Device>,
+  progress_ms:   u32,
+  context:       Option<Context>,
+  item:          Option<Track>,
   is_playing:    bool,
   repeat_state:  String,
   shuffle_state: bool,
@@ -212,28 +215,6 @@ struct Device {
   name:           String,
   volume_percent: u8,
   is_active:      bool,
-}
-
-// This should be the same as Player!!! Remove Playing and exchange for Player
-#[derive(Debug, Deserialize)]
-struct Playing {
-  device:      Option<Device>,
-  progress_ms: u32,
-  context:     Option<Context>,
-  item:        Option<Track>,
-}
-
-impl Playing {
-  fn get_remaining(&self) -> u32 {
-    let progress_ms = self.progress_ms;
-
-    let duration_ms = self.item
-      .as_ref()
-      .map(|track| track.duration_ms)
-      .unwrap_or(0);
-
-    duration_ms.saturating_sub(progress_ms)
-  }
 }
 
 #[derive(Default, Debug, Deserialize)]
@@ -315,19 +296,13 @@ impl Spotify {
       client:       client,
       access_token: access_token,
       player:       player,
-      playing:      None,
       queue:        None,
       history:      None,
     })
   }
 
   fn get_context_uri(&self) -> Result<String, Error> {
-    let playing = self
-      .playing
-      .as_ref()
-      .ok_or("No playing track")?;
-
-    let context = playing.context
+    let context = self.player.context
       .as_ref()
       .ok_or("No track context")?;
 
@@ -335,18 +310,18 @@ impl Spotify {
   }
 
   fn update(&mut self) -> Result<(), Error> {
-    self.update_playing()?;
+    self.update_player()?;
     self.update_queue()?;
     self.update_history()
   }
 
-  fn update_playing(&mut self) -> Result<(), Error> {
-    let playing = self.player.get_playing(
+  fn update_player(&mut self) -> Result<(), Error> {
+    let player = Player::get(
       &self.client,
       &self.access_token,
     )?;
 
-    self.playing = Some(playing);
+    self.player = player;
 
     Ok(())
   }
@@ -384,9 +359,7 @@ impl Spotify {
 
     let next_percent = volume_percent.saturating_add(10).min(100);
 
-    self.volume(next_percent)?;
-
-    Err(format!("{}{}", volume_percent.to_string(), next_percent.to_string()).into())
+    self.volume(next_percent)
   }
 
   fn volume_down(&mut self) -> Result<(), Error> {
@@ -394,9 +367,7 @@ impl Spotify {
 
     let next_percent = volume_percent.saturating_sub(10);
 
-    self.volume(next_percent)?;
-
-    Err(format!("{}{}", volume_percent.to_string(), next_percent.to_string()).into())
+    self.volume(next_percent)
   }
 
   fn mute(&mut self) -> Result<(), Error> {
@@ -475,6 +446,22 @@ impl Player {
     }
 
     Ok(response.error_for_status()?.json()?)
+  }
+
+  fn get_duration(&self) -> Result<u32, Error> {
+    if let Some(track) = &self.item {
+      return Ok(track.duration_ms)
+    }
+
+    Err("No track".into())
+  }
+
+  fn get_remaining(&self) -> Result<u32, Error> {
+    let progress_ms = self.progress_ms;
+
+    let duration_ms = self.get_duration()?;
+
+    Ok(duration_ms.saturating_sub(progress_ms))
   }
 
   fn get_queue(
@@ -721,23 +708,6 @@ impl Player {
     Ok(())
   }
 
-  fn get_playing(
-    &self,
-    client: &reqwest::blocking::Client,
-    access_token: &str,
-  ) -> Result<Playing, Error> {
-    let response = client
-      .get("https://api.spotify.com/v1/me/player/currently-playing")
-      .bearer_auth(access_token)
-      .send()?;
-
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err("Nothing is currently playing".into());
-    }
-
-    Ok(response.error_for_status()?.json()?)
-  }
-
   fn device(&self) -> Result<&Device, Error> {
     self.device
       .as_ref()
@@ -814,6 +784,11 @@ impl App {
 
   fn handle_player_key_event(&mut self, key_event: KeyEvent) {
     match key_event.code {
+      KeyCode::Enter => {
+        if let Err(err) = self.spotify.update() {
+          self.error = Some(err.to_string());
+        }
+      }
       KeyCode::Char(' ') => {
         if self.spotify.player.is_playing {
           if let Err(err) = self.spotify.pause() {
@@ -1024,36 +999,64 @@ impl App {
   }
 
   fn render_player(&self, area: Rect, buf: &mut Buffer) {
-    let color = if self.focus == Focus::Player { Color::Green } else { Color::White };
+    let color = if self.focus == Focus::Player {
+      Color::Green
+    } else {
+      Color::White
+    };
+
     let block = Self::panel(" Player ", color);
 
-    let text = match &self.spotify.playing {
-      Some(playing) => {
-        match &playing.item {
-          Some(track) => {
-            let artists = track
-              .artists
-              .iter()
-              .map(|artist| artist.name.as_str())
-              .collect::<Vec<_>>()
-              .join(", ");
+    block.clone().render(area, buf);
 
-            Text::from(vec![
-              Line::from(track.name.as_str().bold()),
-              Line::from(artists),
-            ])
-          }
-          None => Text::from("No track playing"),
-        }
+    let inner = block.inner(area);
+
+    let [text_area, gauge_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    let text = match &self.spotify.player.item {
+      Some(track) => {
+        let artists = track
+          .artists
+          .iter()
+          .map(|artist| artist.name.as_str())
+          .collect::<Vec<_>>()
+          .join(", ");
+
+        Text::from(vec![
+          Line::from(track.name.as_str().bold()),
+          Line::from(artists),
+        ])
       }
-      None => Text::from("Nothing playing"),
+      None => Text::from("No track playing"),
     };
+
+    let volume_percent = self.spotify.get_volume_percent().unwrap_or(0);
+    let volume_text = Text::from(format!("{}%", volume_percent.to_string()));
+
+    Paragraph::new(volume_text)
+      .right_aligned()
+      .render(text_area, buf);
 
     Paragraph::new(text)
       .centered()
-      .white()
-      .block(block)
-      .render(area, buf);
+      .render(text_area, buf);
+
+    let ratio = if let Ok(duration_ms) = self.spotify.player.get_duration() {
+      self.spotify.player.progress_ms as f64 / duration_ms as f64
+    } else {
+      0.0
+    };
+
+    let gauge = LineGauge::default()
+      .filled_style(Style::default().fg(Color::Green))
+      .unfilled_style(Style::default().fg(Color::DarkGray))
+      .ratio(ratio);
+
+    gauge.render(gauge_area, buf);
   }
 
   fn render_queue(&mut self, area: Rect, buf: &mut Buffer) {
@@ -1067,10 +1070,7 @@ impl App {
     ])
       .bold();
 
-    let mut remaining_ms = self.spotify.playing
-      .as_ref()
-      .map(|playing| playing.get_remaining())
-      .unwrap_or(0);
+    let mut remaining_ms = self.spotify.player.get_remaining().unwrap_or(0);
 
     let rows = match &self.spotify.queue {
       Some(queue) if !queue.queue.is_empty() => {
