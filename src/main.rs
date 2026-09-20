@@ -885,39 +885,91 @@ impl Player {
 // ============================================================================
 
 fn format_ms(ms: u32) -> String {
-  // let sec = (ms / 1000) % 60;
   let min = (ms / 1000) / 60;
 
-  // format!("{:>2}m {:0>2}s", min, sec)
   format!("{:>2}m", min)
 }
 
 // ============================================================================
-// Focus
+// AppWindow
 // ============================================================================
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-enum Focus {
+enum AppWindow {
+  #[default]
+  History,
+  Search,
+
+  Home,
+  /*
+  HomePlaylists,
+  HomeFollowing,
+
+  Artist,
+  ArtistAlbums,
+  ArtistPlaylists,
+  */
+}
+
+// ============================================================================
+// AppFocus - the fields the user can interact with
+// ============================================================================
+
+// Note: the difference between AppFocus and AppWindow is that
+//       there can exist multiple focuses on one window
+//       example: ArtistAlbums, ArtistSongs
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+enum AppFocus {
   #[default]
   Player,
   Queue,
   History,
+
+  /*
+  Search,
+  SearchArtists,
+  SearchAlbums,
+  SearchAccounts,
+  */
+
+  Home,
+  /*
+  HomePlaylists,
+  HomeFollowing,
+
+  Artist,
+  ArtistAlbums,
+  ArtistPlaylists,
+  ArtistSongs,
+  */
 }
 
-impl Focus {
+// ============================================================================
+// AppBlock
+// ============================================================================
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+enum AppBlock {
+  #[default]
+  Player,
+  Queue,
+  Main,
+}
+
+impl AppBlock {
   fn next(&self) -> Self {
     match self {
-      Self::Player  => Self::History,
-      Self::Queue   => Self::Player,
-      Self::History => Self::Queue,
+      Self::Player => Self::Main,
+      Self::Queue  => Self::Player,
+      Self::Main   => Self::Queue,
     }
   }
 
   fn prev(&self) -> Self {
     match self {
-      Self::Player  => Self::Queue,
-      Self::Queue   => Self::History,
-      Self::History => Self::Player,
+      Self::Player => Self::Queue,
+      Self::Queue  => Self::Main,
+      Self::Main   => Self::Player,
     }
   }
 }
@@ -936,8 +988,8 @@ enum Action {
 
   Refresh,
 
-  FocusNext,
-  FocusPrevious,
+  BlockNext,
+  BlockPrevious,
 
   PauseResume,
 
@@ -982,10 +1034,13 @@ struct App {
   spotify:       SpotifyApi,
   state:         SpotifyState,
 
-  focus:         Arc<Mutex<Focus>>,
+  focus:         Arc<Mutex<AppFocus>>,
+  block:         Arc<Mutex<AppBlock>>,
+  window:        Arc<Mutex<AppWindow>>,
 
   queue_state:   TableState,
-  history_state: TableState,
+  history_state: TableState, // Replace this with:
+  // list_states: (TableState, TableState),
 
   action_tx:     UnboundedSender<Action>,
 
@@ -1007,9 +1062,9 @@ impl App {
       spotify,
       state: SpotifyState::default(),
 
-      focus: Arc::new(
-        Mutex::new(Focus::Player)
-      ),
+      block:  Arc::new(Mutex::new(AppBlock::Player)),
+      focus:  Arc::new(Mutex::new(AppFocus::Player)),
+      window: Arc::new(Mutex::new(AppWindow::Home)),
 
       queue_state:   TableState::default(),
       history_state: TableState::default(),
@@ -1073,6 +1128,54 @@ impl App {
   // ------------------------------------------------------------------------
   // Action update
   // ------------------------------------------------------------------------
+  
+  fn set_focus(&mut self, focus: AppFocus) {
+    match self.focus.lock() {
+      Ok(mut app_focus) => *app_focus = focus,
+      Err(_) => return,
+    };
+  }
+  
+  fn set_window(&mut self, window: AppWindow) {
+    match self.window.lock() {
+      Ok(mut app_window) => *app_window = window,
+      Err(_) => return,
+    };
+
+    match window {
+      AppWindow::Home => self.set_focus(AppFocus::Home),
+
+      AppWindow::History => self.set_focus(AppFocus::History),
+
+      _ => {},
+    };
+  }
+  
+  fn update_focus(&mut self) {
+    let app_window = match self.window.lock() {
+      Ok(app_window) => *app_window,
+      Err(_) => return,
+    };
+
+    let app_block = match self.block.lock() {
+      Ok(app_block) => *app_block,
+      Err(_) => return,
+    };
+
+    match app_block {
+      AppBlock::Player => self.set_focus(AppFocus::Player),
+
+      AppBlock::Queue  => self.set_focus(AppFocus::Queue),
+
+      AppBlock::Main   => {
+        match app_window {
+          AppWindow::History => self.set_focus(AppFocus::History),
+
+          _ => self.set_window(AppWindow::Home),
+        };
+      }
+    };
+  }
 
   fn update(&mut self, action: Action) {
     match action {
@@ -1084,18 +1187,22 @@ impl App {
 
       Action::Render => {}
 
-      Action::FocusNext => {
-        match self.focus.lock() {
-          Ok(mut focus) => *focus = focus.next(),
+      Action::BlockNext => {
+        match self.block.lock() {
+          Ok(mut block) => *block = block.next(),
           Err(_) => return,
         };
+
+        self.update_focus();
       }
 
-      Action::FocusPrevious => {
-        match self.focus.lock() {
-          Ok(mut focus) => *focus = focus.prev(),
+      Action::BlockPrevious => {
+        match self.block.lock() {
+          Ok(mut block) => *block = block.prev(),
           Err(_) => return,
         };
+        
+        self.update_focus();
       }
 
       Action::Close => {
@@ -1593,12 +1700,21 @@ impl App {
     &self,
     area: Rect,
     buf: &mut Buffer,
-    selected: usize
   ) {
-    let tabs = ["Home", "Search"];
+    const TABS: [(AppWindow, &str); 2] = [
+      (AppWindow::Home,   "Home"), 
+      (AppWindow::Search, "Search"),
+    ];
 
-    let width: u16 = tabs.iter().map(|t| t.len() as u16).sum::<u16>()
-      + (tabs.len() as u16 - 1) * 3 + 1;
+    let app_window = match self.window.lock() {
+      Ok(app_window) => *app_window,
+      Err(_) => AppWindow::Home,
+    };
+
+    let selected = TABS.iter().position(|(window, _)| *window == app_window).unwrap_or(0);
+
+    let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
+      + (TABS.len() as u16 - 1) * 3 + 1;
 
     let block = Block::bordered();
 
@@ -1611,7 +1727,10 @@ impl App {
     ])
       .split(block.inner(area));
 
-    Tabs::new(tabs)
+    // Creates tabs from every string TABS[i].1
+    let strings: [&_; TABS.len()] = std::array::from_fn(|i| TABS[i].1);
+
+    Tabs::new(strings)
       .select(selected)
       .style(
         Style::default()
@@ -1630,12 +1749,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let focus = match self.focus.lock() {
-      Ok(focus) => *focus,
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
       Err(_) => return,
     };
 
-    let color = if focus == Focus::Player {
+    let color = if app_focus == AppFocus::Player {
       Color::Green
     } else {
       Color::White
@@ -1716,12 +1835,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let focus = match self.focus.lock() {
-      Ok(focus) => *focus,
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
       Err(_) => return,
     };
 
-    let (block_color, header_color) = if focus == Focus::Queue {
+    let (block_color, header_color) = if app_focus == AppFocus::Queue {
       (Color::Green, Color::Yellow)
     } else {
       (Color::White, Color::White)
@@ -1799,17 +1918,49 @@ impl App {
     );
   }
 
+  fn render_window(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_window = match self.window.lock() {
+      Ok(app_window) => *app_window,
+      Err(_) => return,
+    };
+
+    match app_window {
+      AppWindow::History => self.render_history(area, buf),
+
+      AppWindow::Home    => self.render_home(area, buf),
+
+      _ => {},
+    };
+  }
+
+  fn render_home(
+    &self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let line = Line::from("Home");
+
+    Paragraph::new(line)
+      .centered()
+      .wrap(Wrap { trim: true })
+      .render(area, buf);
+  }
+
   fn render_history(
     &mut self,
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let focus = match self.focus.lock() {
-      Ok(focus) => *focus,
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
       Err(_) => return,
     };
 
-    let (block_color, header_color) = if focus == Focus::History {
+    let (block_color, header_color) = if app_focus == AppFocus::History {
       (Color::Green, Color::Yellow)
     } else {
       (Color::White, Color::White)
@@ -1906,25 +2057,31 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let focus = match self.focus.lock() {
-      Ok(focus) => *focus,
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
       Err(_) => return,
     };
 
-    let instructions = match focus {
-      Focus::Player => {
+    let instructions = match app_focus {
+      AppFocus::Player => {
         Line::from(
           "Space Pause/Resume | Enter Refresh | h/← Previous | l/→ Next | ↑/↓ Volume | m Mute | s Shuffle | r Repeat",
         )
       }
 
-      Focus::Queue => {
+      AppFocus::Queue => {
         Line::from(
           "Enter Play | ↑/k Up | ↓/j Down | Home/End Jump",
         )
       }
 
-      Focus::History => {
+      AppFocus::History => {
+        Line::from(
+          "Enter Play | h/← Queue | ↑/k Up | ↓/j Down | Home/End Jump",
+        )
+      }
+
+      AppFocus::Home => {
         Line::from(
           "Enter Play | h/← Queue | ↑/k Up | ↓/j Down | Home/End Jump",
         )
@@ -2055,7 +2212,7 @@ impl Widget for &mut App {
       ])
       .areas(main_area);
 
-    let [ navbar_area, content_area ] = Layout::default()
+    let [ navbar_area, window_area ] = Layout::default()
       .direction(Direction::Vertical)
       .constraints([
         Constraint::Length(3),
@@ -2072,7 +2229,6 @@ impl Widget for &mut App {
     self.render_navbar(
       navbar_area,
       buf,
-      0,
     );
 
     self.render_player(
@@ -2085,8 +2241,8 @@ impl Widget for &mut App {
       buf,
     );
 
-    self.render_history(
-      content_area,
+    self.render_window(
+      window_area,
       buf,
     );
 
@@ -2215,7 +2371,7 @@ fn history_key_action(
 }
 
 fn key_to_action(
-  focus: Focus,
+  app_focus: AppFocus,
   key: KeyEvent,
 ) -> Action {
   match key.code {
@@ -2228,26 +2384,30 @@ fn key_to_action(
     }
 
     KeyCode::Tab => {
-      return Action::FocusNext;
+      return Action::BlockNext;
     }
 
     KeyCode::BackTab => {
-      return Action::FocusPrevious;
+      return Action::BlockPrevious;
     }
 
     _ => {}
   }
 
-  match focus {
-    Focus::Player => {
+  match app_focus {
+    AppFocus::Player => {
       player_key_action(key)
     }
 
-    Focus::Queue => {
+    AppFocus::Queue => {
       queue_key_action(key)
     }
 
-    Focus::History => {
+    AppFocus::History => {
+      history_key_action(key)
+    }
+
+    AppFocus::Home => {
       history_key_action(key)
     }
   }
@@ -2259,7 +2419,7 @@ fn key_to_action(
 
 fn spawn_event_handler(
   tx: UnboundedSender<Action>,
-  app_focus: Arc<Mutex<Focus>>,
+  app_focus: Arc<Mutex<AppFocus>>,
 ) {
   tokio::spawn(async move {
     loop {
@@ -2297,12 +2457,12 @@ fn spawn_event_handler(
         continue;
       }
 
-      let focus = match app_focus.lock() {
-        Ok(focus) => *focus,
+      let app_focus = match app_focus.lock() {
+        Ok(app_focus) => *app_focus,
         Err(_) => return,
       };
 
-      let action = key_to_action(focus, key);
+      let action = key_to_action(app_focus, key);
 
       if tx.send(action).is_err() {
         return;
