@@ -12,6 +12,7 @@ use std::{
   sync::{ Arc, Mutex },
   thread,
   time::Duration,
+  collections::VecDeque,
 };
 
 use base64::{
@@ -40,16 +41,19 @@ use ratatui::{
     Constraint,
     Layout,
     Rect,
+    Direction,
   },
   style::{
     Color,
     Style,
     Stylize,
+    Modifier,
   },
   symbols::border,
   text::{
     Line,
     Text,
+    Span,
   },
   widgets::{
     Block,
@@ -61,8 +65,11 @@ use ratatui::{
     StatefulWidget,
     Table,
     TableState,
+    Tabs,
     Widget,
     Wrap,
+    Borders,
+    Clear,
   },
   DefaultTerminal,
   Frame,
@@ -142,7 +149,7 @@ fn build_authorization_url(
     .append_pair("client_id", client_id)
     .append_pair(
       "scope",
-      "user-modify-playback-state user-read-recently-played",
+      "user-read-playback-state user-modify-playback-state user-read-recently-played",
     )
     .append_pair("code_challenge_method", "S256")
     .append_pair("code_challenge", challenge)
@@ -331,15 +338,17 @@ impl SpotifyApi {
       &self.access_token,
     ).await?;
 
+    /*
     let history = player.get_history(
       &self.client,
       &self.access_token,
     ).await?;
+    */
 
     Ok(SpotifyState {
       player,
       queue: Some(queue),
-      history: Some(history),
+      history: None,
     })
   }
 
@@ -564,10 +573,7 @@ impl Player {
   fn get_remaining(&self) -> Result<u32, Error> {
     let duration_ms = self.get_duration()?;
 
-    Ok(
-      duration_ms
-      .saturating_sub(self.progress_ms)
-    )
+    Ok(duration_ms.saturating_sub(self.progress_ms))
   }
 
   async fn get_queue(
@@ -879,10 +885,11 @@ impl Player {
 // ============================================================================
 
 fn format_ms(ms: u32) -> String {
-  let sec = (ms / 1000) % 60;
+  // let sec = (ms / 1000) % 60;
   let min = (ms / 1000) / 60;
 
-  format!("{:>2}m {:0>2}s", min, sec)
+  // format!("{:>2}m {:0>2}s", min, sec)
+  format!("{:>2}m", min)
 }
 
 // ============================================================================
@@ -922,6 +929,7 @@ impl Focus {
 #[derive(Debug, Clone)]
 enum Action {
   Quit,
+  Close,
 
   Tick,
   Render,
@@ -981,7 +989,7 @@ struct App {
 
   action_tx:     UnboundedSender<Action>,
 
-  error:         Option<String>,
+  error_list:    VecDeque<String>,
   exit:          bool,
 
   // Used to make the progress gauge move smoothly between
@@ -1008,8 +1016,8 @@ impl App {
 
       action_tx,
 
-      error: None,
-      exit:  false,
+      error_list: VecDeque::new(),
+      exit:       false,
 
       last_player_update: std::time::Instant::now(),
     })
@@ -1023,12 +1031,14 @@ impl App {
     // Immediately fetch Spotify state.
     self.action_tx.send(Action::Refresh)?;
 
+    // Render playing song progress bar every 33 ms
     let mut render_interval = time::interval(
       Duration::from_millis(33),
     );
 
+    // Fetch new data from API every 10 s
     let mut refresh_interval = time::interval(
-      Duration::from_secs(5),
+      Duration::from_secs(10),
     );
 
     // Avoid an immediate duplicate refresh from the interval.
@@ -1039,26 +1049,21 @@ impl App {
         Some(action) = action_rx.recv() => {
           self.update(action);
 
-          // Render immediately after a state/action
-          // update. The 30 FPS interval below also
-          // keeps the progress gauge moving.
-          terminal.draw(|frame| {
-            self.draw(frame);
-          })?;
+          // Render immediately after a state/action update
+          terminal.draw(|frame| { self.draw(frame) })?;
         }
 
+          // The 30 FPS interval below also
+          // keeps the progress gauge moving.
         _ = render_interval.tick() => {
           self.update_progress();
 
-          terminal.draw(|frame| {
-            self.draw(frame);
-          })?;
+          terminal.draw(|frame| { self.draw(frame) })?;
         }
 
         _ = refresh_interval.tick() => {
-          self.action_tx
-            .send(Action::Refresh)?;
-          }
+          // self.action_tx.send(Action::Refresh)?;
+        }
       }
     }
 
@@ -1091,6 +1096,10 @@ impl App {
           Ok(mut focus) => *focus = focus.prev(),
           Err(_) => return,
         };
+      }
+
+      Action::Close => {
+        self.error_list.pop_front();
       }
 
       Action::Refresh => {
@@ -1182,13 +1191,11 @@ impl App {
 
         self.last_player_update = std::time::Instant::now();
 
-        self.error = None;
-
         self.clamp_selection();
       }
 
       Action::Error(error) => {
-        self.error = Some(error);
+        self.error_list.push_back(error);
       }
     }
   }
@@ -1197,6 +1204,7 @@ impl App {
   // Progress
   // ------------------------------------------------------------------------
 
+  // Artificially (locally) update the progress time of the playing song
   fn update_progress(&mut self) {
     if !self.state.player.is_playing {
       return;
@@ -1206,16 +1214,16 @@ impl App {
       .elapsed()
       .as_millis() as u32;
 
-    self.state.player.progress_ms = self.state
-      .player
-      .progress_ms
-      .saturating_add(elapsed);
+    // Artificially add the elapsed time,
+    // without needing to fetch new data
+    self.state.player.progress_ms = self.state.player.progress_ms.saturating_add(elapsed);
 
     self.last_player_update = std::time::Instant::now();
 
+    // Clamp the progress time to the duration,
+    // so it doesn't overflow
     if let Ok(duration) = self.state.player.get_duration() {
-      self.state.player.progress_ms =
-        self.state.player.progress_ms.min(duration);
+      self.state.player.progress_ms = self.state.player.progress_ms.min(duration);
     }
   }
 
@@ -1231,19 +1239,13 @@ impl App {
       match spotify.refresh().await {
         Ok(state) => {
           let _ = tx.send(
-            Action::SpotifyStateUpdated {
-              state,
-            },
+            Action::SpotifyStateUpdated { state },
           );
         }
 
         Err(error) => {
           let _ = tx.send(
-            Action::Error(
-              format!(
-                "Refresh failed: {error}"
-              ),
-            ),
+            Action::Error(format!("Refresh failed: {error}")),
           );
         }
       }
@@ -1258,9 +1260,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.pause(&player).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1277,9 +1277,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.resume(&player).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1296,9 +1294,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.next(&player).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1315,9 +1311,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.previous(&player).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1355,9 +1349,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.volume(&player, volume).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1374,9 +1366,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.shuffle(&player).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1393,9 +1383,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.repeat(&player).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1438,9 +1426,7 @@ impl App {
       ).await
       {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1489,9 +1475,7 @@ impl App {
       ).await
       {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1532,9 +1516,7 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.queue(&player, &uri).await {
         let _ = tx.send(
-          Action::Error(
-            error.to_string(),
-          ),
+          Action::Error(error.to_string()),
         );
         return;
       }
@@ -1607,6 +1589,42 @@ impl App {
     frame.render_widget(self, frame.area());
   }
 
+  fn render_navbar(
+    &self,
+    area: Rect,
+    buf: &mut Buffer,
+    selected: usize
+  ) {
+    let tabs = ["Home", "Search"];
+
+    let width: u16 = tabs.iter().map(|t| t.len() as u16).sum::<u16>()
+      + (tabs.len() as u16 - 1) * 3 + 1;
+
+    let block = Block::bordered();
+
+    block.clone().render(area, buf);
+
+    let centered = Layout::horizontal([
+      Constraint::Fill(1),
+      Constraint::Length(width),
+      Constraint::Fill(1),
+    ])
+      .split(block.inner(area));
+
+    Tabs::new(tabs)
+      .select(selected)
+      .style(
+        Style::default()
+        .fg(Color::Gray)
+      )
+      .highlight_style(
+        Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD),
+      )
+      .render(centered[1], buf);
+  }
+
   fn render_player(
     &self,
     area: Rect,
@@ -1648,29 +1666,20 @@ impl App {
           .join(", ");
 
         Text::from(vec![
-          Line::from(
-            track
-            .name
-            .as_str()
-            .bold(),
-          ),
+          Line::from(track.name.as_str().bold()),
           Line::from(artists),
         ])
       }
 
       None => {
-        Text::from(
-          "No track playing"
-        )
+        Text::from("No track playing")
       }
     };
 
     let volume_percent = self.get_volume_percent()
       .unwrap_or(0);
 
-    Paragraph::new(
-      format!("{volume_percent}%"),
-    )
+    Paragraph::new(format!("{volume_percent}%"))
       .right_aligned()
       .render(text_area, buf);
 
@@ -1682,13 +1691,7 @@ impl App {
       if duration_ms == 0 {
         0.0
       } else {
-        (
-          self.state
-          .player
-          .progress_ms
-          .min(duration_ms)
-        ) as f64
-          / duration_ms as f64
+        (self.state.player.progress_ms.min(duration_ms)) as f64 / duration_ms as f64
       }
     } else {
       0.0
@@ -1697,7 +1700,7 @@ impl App {
     let gauge = LineGauge::default()
       .filled_style(
         Style::default()
-        .fg(Color::Green),
+        .fg(color),
       )
       .unfilled_style(
         Style::default()
@@ -1718,19 +1721,23 @@ impl App {
       Err(_) => return,
     };
 
-    let color = if focus == Focus::Queue {
-      Color::Green
+    let (block_color, header_color) = if focus == Focus::Queue {
+      (Color::Green, Color::Yellow)
     } else {
-      Color::White
+      (Color::White, Color::White)
     };
 
-    let block = Self::panel(" Queue ", color);
+    let block = Self::panel(" Queue ", block_color);
 
     let header = Row::new([
-      Cell::from("  #".to_uppercase().cyan()),
-      Cell::from("Track".to_uppercase().cyan()),
-      Cell::from("Playing in".to_uppercase().cyan()),
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+      Cell::from("IN"),
     ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
       .bold();
 
     let mut remaining_ms = self.state.player.get_remaining()
@@ -1741,18 +1748,17 @@ impl App {
         queue.queue
           .iter()
           .enumerate()
-          .map(
-            |(index, track)| {
-              let time_str = format_ms(remaining_ms);
+          .map(|(index, track)| {
+            let time_str = format_ms(remaining_ms);
 
-              remaining_ms = remaining_ms.saturating_add(track.duration_ms);
+            remaining_ms = remaining_ms.saturating_add(track.duration_ms);
 
-              Row::new([
-                Cell::from(format!("+{:0>2}", index + 1)),
-                Cell::from(track.name.as_str()),
-                Cell::from(time_str),
-              ])
-            },
+            Row::new([
+              Cell::from(format!("{:>2}", index + 1)),
+              Cell::from(track.name.as_str()),
+              Cell::from(time_str),
+            ])
+          },
         )
           .collect::<Vec<_>>()
       }
@@ -1769,12 +1775,12 @@ impl App {
     };
 
     let table = Table::new(rows, [
-      Constraint::Length(4),
-      Constraint::Min(1),
-      Constraint::Length(30),
+      Constraint::Length(2),
+      Constraint::Min(10),
+      Constraint::Length(3),
     ])
       .header(header)
-      .column_spacing(1)
+      .column_spacing(2)
       .block(block)
       .style(
         Style::default()
@@ -1803,19 +1809,23 @@ impl App {
       Err(_) => return,
     };
 
-    let color = if focus == Focus::History {
-      Color::Green
+    let (block_color, header_color) = if focus == Focus::History {
+      (Color::Green, Color::Yellow)
     } else {
-      Color::White
+      (Color::White, Color::White)
     };
 
-    let block = Self::panel(" History ", color);
+    let block = Self::panel(" History ", block_color);
 
     let header = Row::new([
-      Cell::from("  #".to_uppercase().cyan()),
-      Cell::from("Track".to_uppercase().cyan()),
-      Cell::from("Played ago".to_uppercase().cyan()),
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+      Cell::from("AGO"),
     ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
       .bold();
 
     let rows = match &self.state.history {
@@ -1835,7 +1845,7 @@ impl App {
             let time_str = format_ms(played_track.get_elapsed());
 
             Row::new([
-              Cell::from(format!("-{:0>2}", index + 1)),
+              Cell::from(format!("{:>2}", index + 1)),
               Cell::from(track.name.as_str()),
               Cell::from(time_str),
             ])
@@ -1867,12 +1877,12 @@ impl App {
     };
 
     let table = Table::new(rows, [
-      Constraint::Length(4),
-      Constraint::Min(1),
-      Constraint::Length(30),
+      Constraint::Length(2),
+      Constraint::Min(10),
+      Constraint::Length(3),
     ])
       .header(header)
-      .column_spacing(1)
+      .column_spacing(2)
       .block(block)
       .style(
         Style::default()
@@ -1933,14 +1943,64 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let error = self.error
-      .as_deref()
-      .unwrap_or("")
-      .red();
+    let mut y = area.y;
 
-    Paragraph::new(Line::from(error))
-      .wrap(Wrap { trim: true })
-      .render(area, buf);
+    for (index, error) in self.error_list.iter().enumerate() {
+      let text_width = error.len() as u16;
+
+      // +2 for left/right borders +2 padding
+      let width = (text_width + 4).min(area.width);
+
+      // Width available for text inside the borders.
+      let content_width = width.saturating_sub(2).max(1);
+
+      // Number of lines required when wrapped.
+      let lines = text_width.div_ceil(content_width);
+
+      // +3 for top/bottom borders + "Error"
+      let height = (lines + 3).min(area.height.saturating_sub(y - area.y));
+
+      let rect = Rect {
+        x: area.x + area.width - width,
+        y,
+        width,
+        height,
+      };
+
+      // Clears rect from any previously rendered text
+      Clear.render(rect, buf);
+
+      let mut block = Block::bordered()
+        .border_type(
+          BorderType::Thick
+        )
+        .border_style(
+          Style::default()
+          .fg(Color::Red)
+        );
+
+
+      if index == 0 {
+        block = block.title(
+          Line::from(vec![
+            Span::styled(" c",    Style::default().fg(Color::Blue)),
+            Span::styled("lose ", Style::default().fg(Color::White)),
+          ])
+          .right_aligned(),
+        );
+      }
+
+      Paragraph::new(Text::from(vec![
+        Line::from("Error".to_string().red()),
+        Line::from(error.as_str().bold().white()),
+      ]))
+        .centered()
+        .wrap(Wrap { trim: false })
+        .block(block)
+        .render(rect, buf);
+
+      y += height;
+    }
   }
 
   fn panel(
@@ -1949,10 +2009,7 @@ impl App {
   ) -> Block<'static> {
     Block::bordered()
       .title(
-        Line::from(
-          format!(" {title} ")
-          .bold(),
-        )
+        Line::from(format!(" {title} ").bold())
         .left_aligned(),
       )
       .border_type(
@@ -1976,29 +2033,47 @@ impl Widget for &mut App {
     buf: &mut Buffer,
   ) {
     let [
+      main_area,
       player_area,
-      content_area,
       instructions_area,
-      error_area,
     ] =
       Layout::vertical([
-        Constraint::Length(5),
         Constraint::Min(5),
+        Constraint::Length(5),
         Constraint::Length(2),
-        Constraint::Length(3),
       ])
       .margin(1)
       .areas(area);
 
     let [
       queue_area,
-      history_area,
+      right_area,
     ] =
       Layout::horizontal([
-        Constraint::Percentage(60),
-        Constraint::Percentage(40),
+        Constraint::Percentage(20),
+        Constraint::Percentage(80),
       ])
-      .areas(content_area);
+      .areas(main_area);
+
+    let [ navbar_area, content_area ] = Layout::default()
+      .direction(Direction::Vertical)
+      .constraints([
+        Constraint::Length(3),
+        Constraint::Min(5),
+      ])
+      .areas(right_area);
+
+    let [ _, error_area ] = Layout::horizontal([
+        Constraint::Percentage(40),
+        Constraint::Percentage(60),
+      ])
+      .areas(area);
+
+    self.render_navbar(
+      navbar_area,
+      buf,
+      0,
+    );
 
     self.render_player(
       player_area,
@@ -2011,7 +2086,7 @@ impl Widget for &mut App {
     );
 
     self.render_history(
-      history_area,
+      content_area,
       buf,
     );
 
@@ -2037,6 +2112,10 @@ fn player_key_action(
   match key.code {
     KeyCode::Enter => {
       Action::Refresh
+    }
+
+    KeyCode::Char('e') => {
+      Action::Error(format!("Test Error"))
     }
 
     KeyCode::Char(' ') => {
@@ -2144,6 +2223,10 @@ fn key_to_action(
       return Action::Quit;
     }
 
+    KeyCode::Char('c') => {
+      return Action::Close;
+    }
+
     KeyCode::Tab => {
       return Action::FocusNext;
     }
@@ -2199,11 +2282,7 @@ fn spawn_event_handler(
 
         Err(error) => {
           let _ = tx.send(
-            Action::Error(
-              format!(
-                "Event task error: {error}"
-              ),
-            ),
+            Action::Error(format!("Event task error: {error}")),
           );
 
           return;
