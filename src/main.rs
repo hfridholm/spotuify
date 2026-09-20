@@ -1,36 +1,109 @@
-use std::io;
-
-use std::{thread, time::Duration};
-use chrono::{DateTime, Utc};
-
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::{
-  buffer::Buffer,
-  layout::{Constraint, Layout, Rect},
-  style::{Stylize, Style, Color},
-  symbols::border,
-  text::{Line, Text},
-  widgets::{Block, BorderType, Cell, Paragraph, Row, Table, Widget, Wrap, TableState, StatefulWidget, LineGauge},
-  DefaultTerminal, Frame,
+use std::{
+  env,
+  io,
+  sync::{ Arc, Mutex },
+  thread,
+  time::Duration,
 };
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::{distr::Alphanumeric, RngExt};
+use base64::{
+  engine::general_purpose::URL_SAFE_NO_PAD,
+  Engine,
+};
+
+use chrono::{DateTime, Utc};
+
+use crossterm::event::{
+  self,
+  Event,
+  KeyCode,
+  KeyEvent,
+  KeyEventKind,
+};
+
+use rand::{
+  RngExt,
+  distr::Alphanumeric,
+};
+
+use ratatui::{
+  buffer::Buffer,
+  layout::{
+    Constraint,
+    Layout,
+    Rect,
+  },
+  style::{
+    Color,
+    Style,
+    Stylize,
+  },
+  symbols::border,
+  text::{
+    Line,
+    Text,
+  },
+  widgets::{
+    Block,
+    BorderType,
+    Cell,
+    LineGauge,
+    Paragraph,
+    Row,
+    StatefulWidget,
+    Table,
+    TableState,
+    Widget,
+    Wrap,
+  },
+  DefaultTerminal,
+  Frame,
+};
+
+use reqwest::{
+  Client,
+  header::CONTENT_LENGTH,
+};
+
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use std::env;
-use tiny_http::{Response, Server};
+
+use sha2::{
+  Digest,
+  Sha256,
+};
+
+use tiny_http::{
+  Response,
+  Server,
+};
+
+use tokio::{
+  sync::mpsc::{
+    self,
+    UnboundedReceiver,
+    UnboundedSender,
+  },
+  time,
+};
+
 use url::Url;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 
+
+// ============================================================================
+// Spotify OAuth
+// ============================================================================
+
 #[derive(Debug, Deserialize)]
 struct SpotifyToken {
-  access_token:  String,
-  scope:         String,
-  expires_in:    u64,
+  access_token: String,
+  #[allow(dead_code)]
+  scope: String,
+  #[allow(dead_code)]
+  expires_in: u64,
   refresh_token: Option<String>,
 }
 
@@ -51,13 +124,18 @@ fn build_authorization_url(
   client_id: &str,
   challenge: &str,
 ) -> String {
-  let mut url = Url::parse("https://accounts.spotify.com/authorize")
+  let mut url = Url::parse(
+    "https://accounts.spotify.com/authorize",
+  )
     .expect("Invalid Spotify authorization URL");
 
   url.query_pairs_mut()
     .append_pair("response_type", "code")
     .append_pair("client_id", client_id)
-    .append_pair("scope", "user-modify-playback-state user-read-recently-played")
+    .append_pair(
+      "scope",
+      "user-modify-playback-state user-read-recently-played",
+    )
     .append_pair("code_challenge_method", "S256")
     .append_pair("code_challenge", challenge)
     .append_pair("redirect_uri", REDIRECT_URI);
@@ -70,7 +148,12 @@ fn wait_for_callback() -> Result<String, Error> {
 
   let request = server.recv()?;
 
-  let url = Url::parse(&format!("http://127.0.0.1{}", request.url()))?;
+  let url = Url::parse(
+    &format!(
+      "http://127.0.0.1{}",
+      request.url()
+    )
+  )?;
 
   let code = url
     .query_pairs()
@@ -83,10 +166,12 @@ fn wait_for_callback() -> Result<String, Error> {
 
   request.respond(response)?;
 
-  code.ok_or_else(|| "Spotify did not return an authorization code".into())
+  code.ok_or_else(|| {
+    "Spotify did not return an authorization code".into()
+  })
 }
 
-fn exchange_code(
+fn exchange_code_blocking(
   client: &reqwest::blocking::Client,
   client_id: &str,
   code: &str,
@@ -108,7 +193,7 @@ fn exchange_code(
   Ok(token)
 }
 
-fn refresh_access_token(
+fn refresh_access_token_blocking(
   client: &reqwest::blocking::Client,
   client_id: &str,
   refresh_token: &str,
@@ -127,23 +212,30 @@ fn refresh_access_token(
   Ok(token)
 }
 
-fn get_access_token(
-  client: &reqwest::blocking::Client,
+fn get_access_token_blocking(
   client_id: &str,
 ) -> Result<String, Error> {
+  let client = reqwest::blocking::Client::new();
+
   let token_path = "refresh_token";
 
   // Try existing refresh token first.
-  if let Ok(refresh_token) = std::fs::read_to_string(token_path) {
-    let token = refresh_access_token(
-      client,
+  if let Ok(refresh_token) =
+    std::fs::read_to_string(token_path)
+  {
+    let token = refresh_access_token_blocking(
+      &client,
       client_id,
       refresh_token.trim(),
     )?;
 
-    // Spotify can return a new refresh token.
-    if let Some(new_refresh_token) = &token.refresh_token {
-      std::fs::write(token_path, new_refresh_token)?;
+    if let Some(new_refresh_token) =
+      &token.refresh_token
+    {
+      std::fs::write(
+        token_path,
+        new_refresh_token,
+      )?;
     }
 
     return Ok(token.access_token);
@@ -151,29 +243,33 @@ fn get_access_token(
 
   // No refresh token: perform initial authorization.
 
-  // 1. Generate PKCE values
   let verifier = generate_code_verifier();
   let challenge = generate_code_challenge(&verifier);
 
-  // 2. Build authorization URL
   let auth_url = build_authorization_url(
-    &client_id,
+    client_id,
     &challenge,
   );
 
-  // 3. Start callback server BEFORE opening browser
-  // Try to open the browser automatically.
+  // Start the callback server before opening the browser.
+  //
+  // wait_for_callback() is blocking, but this entire OAuth
+  // operation is called from spawn_blocking by App::new().
   if let Err(error) = open::that(&auth_url) {
-    eprintln!("Could not open browser automatically: {error}");
+    eprintln!(
+      "Could not open browser automatically: {error}"
+    );
+
+    eprintln!(
+      "Open this URL manually:\n{auth_url}"
+    );
   }
 
-  // 4. Wait for Spotify to redirect back to us
   let code = wait_for_callback()?;
 
-  // 5. Exchange code for access token
-  let token = exchange_code(
+  let token = exchange_code_blocking(
     &client,
-    &client_id,
+    client_id,
     &code,
     &verifier,
   )?;
@@ -182,375 +278,442 @@ fn get_access_token(
     .refresh_token
     .ok_or("Spotify did not return a refresh token")?;
 
-  std::fs::write(token_path, &refresh_token)?;
+  std::fs::write(
+    token_path,
+    &refresh_token,
+  )?;
 
   Ok(token.access_token)
 }
 
-#[derive(Default, Debug, Deserialize)]
-struct Spotify {
-  #[serde(skip)]
-  client:       reqwest::blocking::Client,
-  access_token: String,
-  player:       Player, // Player doesn't need to be Option,
-                        // becuase if no player exists, the TUI can't be used
-  queue:        Option<Queue>,
-  history:      Option<History>,
+
+// ============================================================================
+// Spotify data types
+// ============================================================================
+
+#[derive(Default, Debug, Clone)]
+struct SpotifyState {
+  player: Player,
+  queue: Option<Queue>,
+  history: Option<History>,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Debug, Clone)]
+struct SpotifyApi {
+  client: Client,
+  access_token: Arc<str>,
+}
+
+impl SpotifyApi {
+  async fn new() -> Result<Self, Error> {
+    let client_id = env::var("CLIENT_ID")?;
+
+    let access_token =
+      tokio::task::spawn_blocking(move || {
+        get_access_token_blocking(&client_id)
+      })
+    .await??;
+
+    Ok(Self {
+      client: Client::new(),
+      access_token: Arc::from(access_token),
+    })
+  }
+
+  async fn fetch_state(
+    &self,
+  ) -> Result<SpotifyState, Error> {
+    let player = Player::get(
+      &self.client,
+      &self.access_token,
+    )
+      .await?;
+
+    let queue = player
+      .get_queue(
+        &self.client,
+        &self.access_token,
+      )
+      .await?;
+
+    let history = player
+      .get_history(
+        &self.client,
+        &self.access_token,
+      )
+      .await?;
+
+    Ok(SpotifyState {
+      player,
+      queue: Some(queue),
+      history: Some(history),
+    })
+  }
+
+  async fn refresh(
+    &self,
+  ) -> Result<SpotifyState, Error> {
+    self.fetch_state().await
+  }
+
+  async fn pause(
+    &self,
+    player: &Player,
+  ) -> Result<(), Error> {
+    player
+      .pause(
+        &self.client,
+        &self.access_token,
+      )
+      .await
+  }
+
+  async fn resume(
+    &self,
+    player: &Player,
+  ) -> Result<(), Error> {
+    player
+      .resume(
+        &self.client,
+        &self.access_token,
+      )
+      .await
+  }
+
+  async fn next(
+    &self,
+    player: &Player,
+  ) -> Result<(), Error> {
+    player
+      .next(
+        &self.client,
+        &self.access_token,
+      )
+      .await
+  }
+
+  async fn previous(
+    &self,
+    player: &Player,
+  ) -> Result<(), Error> {
+    player
+      .prev(
+        &self.client,
+        &self.access_token,
+      )
+      .await
+  }
+
+  async fn volume(
+    &self,
+    player: &Player,
+    volume: u8,
+  ) -> Result<(), Error> {
+    player
+      .volume(
+        &self.client,
+        &self.access_token,
+        volume,
+      )
+      .await
+  }
+
+  async fn shuffle(
+    &self,
+    player: &Player,
+  ) -> Result<(), Error> {
+    player
+      .toggle_shuffle(
+        &self.client,
+        &self.access_token,
+      )
+      .await
+  }
+
+  async fn repeat(
+    &self,
+    player: &Player,
+  ) -> Result<(), Error> {
+    player
+      .toggle_repeat(
+        &self.client,
+        &self.access_token,
+      )
+      .await
+  }
+
+  async fn play(
+    &self,
+    player: &Player,
+    uri: &str,
+    context_uri: &str,
+  ) -> Result<(), Error> {
+    player
+      .play(
+        &self.client,
+        &self.access_token,
+        uri,
+        context_uri,
+      )
+      .await
+  }
+
+  async fn queue(
+    &self,
+    player: &Player,
+    uri: &str,
+  ) -> Result<(), Error> {
+    player
+      .queue(
+        &self.client,
+        &self.access_token,
+        uri,
+      )
+      .await
+  }
+}
+
+
+// ============================================================================
+// Spotify models
+// ============================================================================
+
+#[derive(Default, Debug, Clone, Deserialize)]
 struct Player {
-  device:        Option<Device>,
-  progress_ms:   u32,
-  context:       Option<Context>,
-  item:          Option<Track>,
-  is_playing:    bool,
-  repeat_state:  String,
+  device: Option<Device>,
+  progress_ms: u32,
+  context: Option<Context>,
+  item: Option<Track>,
+  is_playing: bool,
+  repeat_state: String,
   shuffle_state: bool,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 struct Device {
-  id:             String,
-  name:           String,
+  id: String,
+  name: String,
   volume_percent: u8,
-  is_active:      bool,
+  is_active: bool,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 struct History {
   items: Vec<PlayedTrack>,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 struct PlayedTrack {
-  track:     Option<Track>,
+  track: Option<Track>,
   played_at: String,
 }
 
 impl PlayedTrack {
-  fn get_elapsed(&self) -> u32{
-    let then = DateTime::parse_from_rfc3339(&self.played_at)
-      .unwrap()
-      .with_timezone(&Utc);
+  fn get_elapsed(&self) -> u32 {
+    let then =
+      match DateTime::parse_from_rfc3339(
+        &self.played_at,
+      ) {
+        Ok(value) => value.with_timezone(&Utc),
+        Err(_) => return 0,
+      };
 
     let now = Utc::now();
-    let elapsed = now.signed_duration_since(then);
 
-    elapsed.num_milliseconds() as u32
+    let elapsed =
+      now.signed_duration_since(then);
+
+    elapsed
+      .num_milliseconds()
+      .max(0) as u32
   }
 }
 
-fn format_ms(ms: u32) -> String {
-  let sec = (ms / 1000) % 60;
-  let min = (ms / 1000) / 60;
-
-  let sec_str = sec.to_string();
-  let min_str = min.to_string();
-
-  format!("{:>2}m {:0>2}s", min_str, sec_str)
-}
-
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 struct Queue {
   currently_playing: Option<Track>,
-  queue:             Vec<Track>,
+  queue: Vec<Track>,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 struct Context {
   uri: String,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 struct Track {
-  id:          String,
-  name:        String,
-  uri:         String,
+  id: String,
+  name: String,
+  uri: String,
   duration_ms: u32,
-  artists:     Vec<Artist>,
+  artists: Vec<Artist>,
 }
 
-#[derive(Default, Debug, Deserialize)]
+#[derive(Default, Debug, Clone, Deserialize)]
 struct Artist {
-  id:   String,
+  id: String,
   name: String,
 }
 
-impl Spotify {
-  fn new() -> Result<Self, Error> {
-    let client_id = env::var("CLIENT_ID")?;
-    let client = reqwest::blocking::Client::new();
 
-    let access_token = get_access_token(
-      &client,
-      &client_id,
-    )?;
-
-    let player = Player::get(
-      &client,
-      &access_token,
-    )?;
-
-    Ok(Self {
-      client:       client,
-      access_token: access_token,
-      player:       player,
-      queue:        None,
-      history:      None,
-    })
-  }
-
-  fn get_context_uri(&self) -> Result<String, Error> {
-    let context = self.player.context
-      .as_ref()
-      .ok_or("No track context")?;
-
-    Ok(context.uri.clone())
-  }
-
-  fn update(&mut self) -> Result<(), Error> {
-    self.update_player()?;
-    self.update_queue()?;
-    self.update_history()
-  }
-
-  fn update_player(&mut self) -> Result<(), Error> {
-    let player = Player::get(
-      &self.client,
-      &self.access_token,
-    )?;
-
-    self.player = player;
-
-    Ok(())
-  }
-
-  fn update_queue(&mut self) -> Result<(), Error> {
-    let queue = self.player.get_queue(
-      &self.client,
-      &self.access_token,
-    )?;
-
-    self.queue = Some(queue);
-
-    Ok(())
-  }
-
-  fn update_history(&mut self) -> Result<(), Error> {
-    let history = self.player.get_history(
-      &self.client,
-      &self.access_token,
-    )?;
-
-    self.history = Some(history);
-
-    Ok(())
-  }
-
-  fn get_volume_percent(&self) -> Result<u8, Error> {
-    let device = self.player.device()?;
-
-    Ok(device.volume_percent)
-  }
-
-  fn volume_up(&mut self) -> Result<(), Error> {
-    let volume_percent = self.get_volume_percent()?;
-
-    let next_percent = volume_percent.saturating_add(10).min(100);
-
-    self.volume(next_percent)
-  }
-
-  fn volume_down(&mut self) -> Result<(), Error> {
-    let volume_percent = self.get_volume_percent()?;
-
-    let next_percent = volume_percent.saturating_sub(10);
-
-    self.volume(next_percent)
-  }
-
-  fn mute(&mut self) -> Result<(), Error> {
-    self.volume(0)
-  }
-
-  fn volume(&mut self, volume_percent: u8) -> Result<(), Error> {
-    self.player.volume(&self.client, &self.access_token, volume_percent)?;
-
-    // Need to wait for the next track to start, before reading it
-    thread::sleep(Duration::from_millis(500));
-
-    self.update()
-  }
-
-  fn queue(&mut self, uri: &str) -> Result<(), Error> {
-    self.player.queue(&self.client, &self.access_token, uri)?;
-
-    // Need to wait for the next track to start, before reading it
-    thread::sleep(Duration::from_millis(500));
-
-    self.update()
-  }
-
-  fn play(&mut self, uri: &str, context_uri: &str) -> Result<(), Error> {
-    self.player.play(&self.client, &self.access_token, uri, context_uri)
-  }
-
-  fn resume(&mut self) -> Result<(), Error> {
-    self.player.resume(&self.client, &self.access_token)
-  }
-
-  fn pause(&mut self) -> Result<(), Error> {
-    self.player.pause(&self.client, &self.access_token)
-  }
-
-  fn next(&mut self) -> Result<(), Error> {
-    self.player.next(&self.client, &self.access_token)?;
-
-    // Need to wait for the next track to start, before reading it
-    thread::sleep(Duration::from_millis(500));
-
-    self.update()
-  }
-
-  fn prev(&mut self) -> Result<(), Error> {
-    self.player.prev(&self.client, &self.access_token)?;
-
-    // Need to wait for the next track to start, before reading it
-    thread::sleep(Duration::from_millis(500));
-
-    self.update()
-  }
-
-  fn toggle_repeat(&mut self) -> Result<(), Error> {
-    self.player.toggle_repeat(&self.client, &self.access_token)
-  }
-
-  fn toggle_shuffle(&mut self) -> Result<(), Error> {
-    self.player.toggle_shuffle(&self.client, &self.access_token)
-  }
-}
+// ============================================================================
+// Spotify API implementation
+// ============================================================================
 
 impl Player {
-  fn get(
-    client: &reqwest::blocking::Client,
+  async fn get(
+    client: &Client,
     access_token: &str,
   ) -> Result<Self, Error> {
     let response = client
       .get("https://api.spotify.com/v1/me/player")
       .bearer_auth(access_token)
-      .send()?;
+      .send()
+      .await?;
 
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err("Nothing is currently playing".into());
+    if response.status()
+      == reqwest::StatusCode::NO_CONTENT
+    {
+      return Err(
+        "Nothing is currently playing".into()
+      );
     }
 
-    Ok(response.error_for_status()?.json()?)
+    Ok(
+      response
+      .error_for_status()?
+      .json::<Player>()
+      .await?,
+    )
   }
 
   fn get_duration(&self) -> Result<u32, Error> {
-    if let Some(track) = &self.item {
-      return Ok(track.duration_ms)
-    }
-
-    Err("No track".into())
+    self.item
+      .as_ref()
+      .map(|track| track.duration_ms)
+      .ok_or_else(|| "No track".into())
   }
 
   fn get_remaining(&self) -> Result<u32, Error> {
-    let progress_ms = self.progress_ms;
-
     let duration_ms = self.get_duration()?;
 
-    Ok(duration_ms.saturating_sub(progress_ms))
+    Ok(
+      duration_ms
+      .saturating_sub(self.progress_ms)
+    )
   }
 
-  fn get_queue(
-    &mut self,
-    client: &reqwest::blocking::Client,
+  async fn get_queue(
+    &self,
+    client: &Client,
     access_token: &str,
   ) -> Result<Queue, Error> {
     let response = client
-      .get("https://api.spotify.com/v1/me/player/queue")
+      .get(
+        "https://api.spotify.com/v1/me/player/queue",
+      )
       .bearer_auth(access_token)
-      .send()?;
+      .send()
+      .await?;
 
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
+    if response.status()
+      == reqwest::StatusCode::NO_CONTENT
+    {
       return Err("Queue is empty".into());
     }
 
-    let queue: Queue = response
+    Ok(
+      response
       .error_for_status()?
-      .json()?;
-
-    Ok(queue)
+      .json::<Queue>()
+      .await?,
+    )
   }
 
-  fn get_history(
-    &mut self,
-    client: &reqwest::blocking::Client,
+  async fn get_history(
+    &self,
+    client: &Client,
     access_token: &str,
   ) -> Result<History, Error> {
     let response = client
-      .get("https://api.spotify.com/v1/me/player/recently-played")
+      .get(
+        "https://api.spotify.com/v1/me/player/recently-played",
+      )
       .bearer_auth(access_token)
-      .send()?;
+      .send()
+      .await?;
 
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err("No recently played tracks".into());
+    if response.status()
+      == reqwest::StatusCode::NO_CONTENT
+    {
+      return Err(
+        "No recently played tracks".into()
+      );
     }
 
-    let history: History = response
+    Ok(
+      response
       .error_for_status()?
-      .json()?;
-
-    Ok(history)
+      .json::<History>()
+      .await?,
+    )
   }
 
-  fn volume(
-    &mut self,
-    client: &reqwest::blocking::Client,
+  async fn volume(
+    &self,
+    client: &Client,
     access_token: &str,
     volume_percent: u8,
   ) -> Result<(), Error> {
     let device = self.device()?;
 
     client
-      .put("https://api.spotify.com/v1/me/player/volume")
+      .put(
+        "https://api.spotify.com/v1/me/player/volume",
+      )
       .query(&[
-        ("device_id", device.id.as_str()),
-        ("volume_percent", &volume_percent.to_string())
+        ("device_id", &device.id.as_str()),
+        (
+          "volume_percent",
+          &volume_percent.to_string().as_str(),
+        ),
       ])
       .bearer_auth(access_token)
-      .send()?
+      .header(CONTENT_LENGTH, "0")
+      .send()
+      .await?
       .error_for_status()?;
 
     Ok(())
   }
 
-  fn queue(
-    &mut self,
-    client: &reqwest::blocking::Client,
+  async fn queue(
+    &self,
+    client: &Client,
     access_token: &str,
     uri: &str,
   ) -> Result<(), Error> {
     let device = self.device()?;
 
     client
-      .post("https://api.spotify.com/v1/me/player/queue")
+      .post(
+        "https://api.spotify.com/v1/me/player/queue",
+      )
       .query(&[
-        ("device_id", device.id.as_str()),
-        ("uri",       uri)
+        ("device_id", &device.id.as_str()),
+        ("uri", &uri),
       ])
       .bearer_auth(access_token)
-      .send()?
+      .send()
+      .await?
       .error_for_status()?;
 
     Ok(())
   }
 
-  fn play(
-    &mut self,
-    client: &reqwest::blocking::Client,
+  async fn play(
+    &self,
+    client: &Client,
     access_token: &str,
     uri: &str,
     context_uri: &str,
@@ -564,65 +727,81 @@ impl Player {
     } else {
       serde_json::json!({
         "context_uri": context_uri,
+        "offset": { "uri": uri },
       })
     };
 
     client
-      .put("https://api.spotify.com/v1/me/player/play")
-      .query(&[("device_id", device.id.as_str())])
+      .put(
+        "https://api.spotify.com/v1/me/player/play",
+      )
+      .query(&[
+        ("device_id", &device.id.as_str()),
+      ])
       .json(&body)
       .bearer_auth(access_token)
-      .send()?
+      .send()
+      .await?
       .error_for_status()?;
 
-    self.is_playing = true;
-
     Ok(())
   }
 
-  fn resume(
-    &mut self,
-    client: &reqwest::blocking::Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    self.put(client, access_token, "https://api.spotify.com/v1/me/player/play")?;
-
-    self.is_playing = true;
-
-    Ok(())
-  }
-
-  fn pause(
-    &mut self,
-    client: &reqwest::blocking::Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    self.put(client, access_token, "https://api.spotify.com/v1/me/player/pause")?;
-
-    self.is_playing = false;
-
-    Ok(())
-  }
-
-  fn next(
+  async fn resume(
     &self,
-    client: &reqwest::blocking::Client,
+    client: &Client,
     access_token: &str,
   ) -> Result<(), Error> {
-    self.post(client, access_token, "https://api.spotify.com/v1/me/player/next")
+    self.put(
+      client,
+      access_token,
+      "https://api.spotify.com/v1/me/player/play",
+    )
+      .await
   }
 
-  fn prev(
+  async fn pause(
     &self,
-    client: &reqwest::blocking::Client,
+    client: &Client,
     access_token: &str,
   ) -> Result<(), Error> {
-    self.post(client, access_token, "https://api.spotify.com/v1/me/player/previous")
+    self.put(
+      client,
+      access_token,
+      "https://api.spotify.com/v1/me/player/pause",
+    )
+      .await
   }
 
-  fn put(
+  async fn next(
     &self,
-    client: &reqwest::blocking::Client,
+    client: &Client,
+    access_token: &str,
+  ) -> Result<(), Error> {
+    self.post(
+      client,
+      access_token,
+      "https://api.spotify.com/v1/me/player/next",
+    )
+      .await
+  }
+
+  async fn prev(
+    &self,
+    client: &Client,
+    access_token: &str,
+  ) -> Result<(), Error> {
+    self.post(
+      client,
+      access_token,
+      "https://api.spotify.com/v1/me/player/previous",
+    )
+      .await
+  }
+
+  async fn put(
+    &self,
+    client: &Client,
     access_token: &str,
     url: &str,
   ) -> Result<(), Error> {
@@ -630,17 +809,21 @@ impl Player {
 
     client
       .put(url)
-      .query(&[("device_id", device.id.as_str())])
+      .query(&[
+        ("device_id", &device.id.as_str()),
+      ])
       .bearer_auth(access_token)
-      .send()?
+      .header(CONTENT_LENGTH, "0")
+      .send()
+      .await?
       .error_for_status()?;
 
     Ok(())
   }
 
-  fn post(
+  async fn post(
     &self,
-    client: &reqwest::blocking::Client,
+    client: &Client,
     access_token: &str,
     url: &str,
   ) -> Result<(), Error> {
@@ -648,62 +831,79 @@ impl Player {
 
     client
       .post(url)
-      .query(&[("device_id", device.id.as_str())])
+      .query(&[
+        ("device_id", &device.id.as_str()),
+      ])
       .bearer_auth(access_token)
-      .send()?
+      .header(CONTENT_LENGTH, "0")
+      .send()
+      .await?
       .error_for_status()?;
 
     Ok(())
   }
 
-  fn toggle_shuffle(
-    &mut self,
-    client: &reqwest::blocking::Client,
+  async fn toggle_shuffle(
+    &self,
+    client: &Client,
     access_token: &str,
   ) -> Result<(), Error> {
     let device = self.device()?;
 
-    let next_state = !self.shuffle_state;
+    let next_state =
+      !self.shuffle_state;
 
     client
-      .put("https://api.spotify.com/v1/me/player/shuffle")
+      .put(
+        "https://api.spotify.com/v1/me/player/shuffle",
+      )
       .query(&[
         ("state", next_state.to_string()),
-        ("device_id", device.id.clone())
+        ("device_id", device.id.clone()),
       ])
       .bearer_auth(access_token)
-      .send()?
+      .send()
+      .await?
       .error_for_status()?;
-
-    self.shuffle_state = next_state;
 
     Ok(())
   }
 
-  fn toggle_repeat(
-    &mut self,
-    client: &reqwest::blocking::Client,
+  async fn toggle_repeat(
+    &self,
+    client: &Client,
     access_token: &str,
   ) -> Result<(), Error> {
     let device = self.device()?;
 
-    let states = ["track", "context", "off"];
+    let states = [
+      "track",
+      "context",
+      "off",
+    ];
 
-    let index = states.iter().position(|&s| s == self.repeat_state).unwrap_or(0);
+    let index = states
+      .iter()
+      .position(|&state| {
+        state == self.repeat_state
+      })
+    .unwrap_or(0);
 
-    let next_state = states[(index + 1) % 3];
+    let next_state =
+      states[(index + 1) % states.len()];
 
     client
-      .put("https://api.spotify.com/v1/me/player/repeat")
+      .put(
+        "https://api.spotify.com/v1/me/player/repeat",
+      )
       .query(&[
         ("state", next_state),
-        ("device_id", device.id.as_str())
+        ("device_id", &device.id.clone()),
       ])
       .bearer_auth(access_token)
-      .send()?
+      .send()
+      .await?
       .error_for_status()?;
-
-    self.repeat_state = next_state.to_string();
 
     Ok(())
   }
@@ -711,28 +911,50 @@ impl Player {
   fn device(&self) -> Result<&Device, Error> {
     self.device
       .as_ref()
-      .ok_or("No Spotify device found".into())
+      .ok_or_else(|| {
+        "No Spotify device found".into()
+      })
   }
 }
 
-// Which window is being focused
-#[derive(Debug, Default, PartialEq)]
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+fn format_ms(ms: u32) -> String {
+  let sec = (ms / 1000) % 60;
+  let min = (ms / 1000) / 60;
+
+  format!("{:>2}m {:0>2}s", min, sec)
+}
+
+
+// ============================================================================
+// Focus
+// ============================================================================
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum Focus {
-  #[default] Player,
+  #[default]
+  Player,
+
   Queue,
+
   History,
 }
 
 impl Focus {
   fn next(&self) -> Self {
-    match *self {
+    match self {
       Self::Player => Self::History,
       Self::Queue => Self::Player,
       Self::History => Self::Queue,
     }
   }
+
   fn prev(&self) -> Self {
-    match *self {
+    match self {
       Self::Player => Self::Queue,
       Self::Queue => Self::History,
       Self::History => Self::Player,
@@ -740,511 +962,1237 @@ impl Focus {
   }
 }
 
-#[derive(Debug, Default)]
-pub struct App {
-  spotify:       Spotify,
-  focus:         Focus,
-  queue_state:   TableState,
-  history_state: TableState,
-  error:         Option<String>,
-  exit:          bool,
+
+// ============================================================================
+// Actions
+// ============================================================================
+
+#[derive(Debug, Clone)]
+enum Action {
+  Quit,
+
+  Tick,
+  Render,
+
+  Refresh,
+
+  FocusNext,
+  FocusPrevious,
+
+  PauseResume,
+
+  Next,
+  Previous,
+
+  VolumeUp,
+  VolumeDown,
+  Mute,
+
+  ToggleShuffle,
+  ToggleRepeat,
+
+  QueueMoveNext,
+  QueueMovePrevious,
+  QueueFirst,
+  QueueLast,
+
+  HistoryMoveNext,
+  HistoryMovePrevious,
+  HistoryFirst,
+  HistoryLast,
+
+  PlayQueue,
+
+  PlayHistory,
+
+  QueueHistory,
+
+  SpotifyStateUpdated {
+    state: SpotifyState,
+  },
+
+  Error(String),
 }
 
-impl App {
-  fn new() -> Result<Self, Error> {
-    let spotify = Spotify::new()?;
 
-    Ok(Self {
-      spotify:       spotify,
-      focus:         Focus::Player,
-      queue_state:   TableState::default(),
-      history_state: TableState::default(),
-      error:         None,
-      exit:          false,
-    })
-  }
+// ============================================================================
+// App
+// ============================================================================
 
-  // runs the application's main loop until the user quits
-  pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
-    while !self.exit {
-      terminal.draw(|frame| self.draw(frame))?;
+struct App {
+  spotify: SpotifyApi,
+  state: SpotifyState,
 
-      self.handle_events()?;
+  focus: Arc<Mutex<Focus>>,
+
+  queue_state: TableState,
+  history_state: TableState,
+
+  action_tx: UnboundedSender<Action>,
+
+  error: Option<String>,
+  exit: bool,
+
+  // Used to make the progress gauge move smoothly between
+  // Spotify API refreshes.
+  last_player_update: std::time::Instant,
+}
+
+  impl App {
+    async fn new(
+      action_tx: UnboundedSender<Action>,
+    ) -> Result<Self, Error> {
+      let spotify =
+        SpotifyApi::new().await?;
+
+      Ok(Self {
+        spotify,
+        state: SpotifyState::default(),
+
+        focus: Arc::new(
+          Mutex::new(Focus::Player)
+        ),
+
+        queue_state: TableState::default(),
+        history_state: TableState::default(),
+
+        action_tx,
+
+        error: None,
+        exit: false,
+
+        last_player_update:
+          std::time::Instant::now(),
+      })
     }
-    Ok(())
-  }
 
-  fn draw(&mut self, frame: &mut Frame) {
-    frame.render_widget(self, frame.area());
-  }
+    async fn run(
+      &mut self,
+      terminal: &mut DefaultTerminal,
+      mut action_rx: UnboundedReceiver<Action>,
+    ) -> Result<(), Error> {
+      // Immediately fetch Spotify state.
+      self.action_tx
+        .send(Action::Refresh)?;
 
-  fn exit(&mut self) {
-    self.exit = true;
-  }
+      let mut render_interval =
+        time::interval(
+          Duration::from_millis(33),
+        );
 
-  fn handle_player_key_event(&mut self, key_event: KeyEvent) {
-    match key_event.code {
-      KeyCode::Enter => {
-        if let Err(err) = self.spotify.update() {
-          self.error = Some(err.to_string());
-        }
-      }
-      KeyCode::Char(' ') => {
-        if self.spotify.player.is_playing {
-          if let Err(err) = self.spotify.pause() {
-            self.error = Some(err.to_string());
+      let mut refresh_interval =
+        time::interval(
+          Duration::from_secs(5),
+        );
+
+      // Avoid an immediate duplicate refresh from the interval.
+      refresh_interval.tick().await;
+
+      while !self.exit {
+        tokio::select! {
+          Some(action) = action_rx.recv() => {
+            self.update(action);
+
+            // Render immediately after a state/action
+            // update. The 30 FPS interval below also
+            // keeps the progress gauge moving.
+            terminal.draw(|frame| {
+              self.draw(frame);
+            })?;
           }
-        } else {
-          if let Err(err) = self.spotify.resume() {
-            self.error = Some(err.to_string());
+
+          _ = render_interval.tick() => {
+            self.update_progress();
+
+            terminal.draw(|frame| {
+              self.draw(frame);
+            })?;
+          }
+
+          _ = refresh_interval.tick() => {
+            self.action_tx
+              .send(Action::Refresh)?;
+            }
+        }
+      }
+
+      Ok(())
+    }
+
+    // ------------------------------------------------------------------------
+    // Action update
+    // ------------------------------------------------------------------------
+
+    fn update(&mut self, action: Action) {
+      match action {
+        Action::Quit => {
+          self.exit = true;
+        }
+
+        Action::Tick => {}
+
+        Action::Render => {}
+
+        Action::FocusNext => {
+          match self.focus.lock() {
+            Ok(mut focus) => *focus = focus.next(),
+            Err(_) => return,
+          };
+        }
+
+        Action::FocusPrevious => {
+          match self.focus.lock() {
+            Ok(mut focus) => *focus = focus.prev(),
+            Err(_) => return,
+          };
+        }
+
+        Action::Refresh => {
+          self.spawn_refresh();
+        }
+
+        Action::PauseResume => {
+          if self.state.player.is_playing {
+            self.spawn_pause();
+          } else {
+            self.spawn_resume();
           }
         }
-      },
-      KeyCode::Right | KeyCode::Char('l') => {
-        if let Err(err) = self.spotify.next() {
-          self.error = Some(err.to_string());
+
+        Action::Next => {
+          self.spawn_next();
         }
-      },
-      KeyCode::Left | KeyCode::Char('h') => {
-        if let Err(err) = self.spotify.prev() {
-          self.error = Some(err.to_string());
+
+        Action::Previous => {
+          self.spawn_previous();
         }
-      },
-      KeyCode::Down | KeyCode::Char('j') => {
-        if let Err(err) = self.spotify.volume_down() {
-          self.error = Some(err.to_string());
+
+        Action::VolumeUp => {
+          self.spawn_volume_up();
+        }
+
+        Action::VolumeDown => {
+          self.spawn_volume_down();
+        }
+
+        Action::Mute => {
+          self.spawn_mute();
+        }
+
+        Action::ToggleShuffle => {
+          self.spawn_shuffle();
+        }
+
+        Action::ToggleRepeat => {
+          self.spawn_repeat();
+        }
+
+        Action::QueueMoveNext => {
+          self.queue_state.select_next();
+        }
+
+        Action::QueueMovePrevious => {
+          self.queue_state.select_previous();
+        }
+
+        Action::QueueFirst => {
+          self.queue_state.select_first();
+        }
+
+        Action::QueueLast => {
+          self.queue_state.select_last();
+        }
+
+        Action::HistoryMoveNext => {
+          self.history_state.select_next();
+        }
+
+        Action::HistoryMovePrevious => {
+          self.history_state.select_previous();
+        }
+
+        Action::HistoryFirst => {
+          self.history_state.select_first();
+        }
+
+        Action::HistoryLast => {
+          self.history_state.select_last();
+        }
+
+        Action::PlayQueue => {
+          self.spawn_play_queue();
+        }
+
+        Action::PlayHistory => {
+          self.spawn_play_history();
+        }
+
+        Action::QueueHistory => {
+          self.spawn_queue_history();
+        }
+
+        Action::SpotifyStateUpdated { state } => {
+          self.state = state;
+
+          self.last_player_update =
+            std::time::Instant::now();
+
+          self.error = None;
+
+          self.clamp_selection();
+        }
+
+        Action::Error(error) => {
+          self.error = Some(error);
         }
       }
-      KeyCode::Up | KeyCode::Char('k') => {
-        if let Err(err) = self.spotify.volume_up() {
-          self.error = Some(err.to_string());
-        }
-      }
-      KeyCode::Char('m') => {
-        // Mute
-        if let Err(err) = self.spotify.mute() {
-          self.error = Some(err.to_string());
-        }
-      }
-      KeyCode::Char('s') => {
-        if let Err(err) = self.spotify.toggle_shuffle() {
-          self.error = Some(err.to_string());
-        }
-      },
-      KeyCode::Char('r') => {
-        if let Err(err) = self.spotify.toggle_repeat() {
-          self.error = Some(err.to_string());
-        }
-      },
-      _ => { return; }
     }
 
-    if let Err(err) = self.spotify.update() {
-      self.error = Some(err.to_string());
+    // ------------------------------------------------------------------------
+    // Progress
+    // ------------------------------------------------------------------------
+
+    fn update_progress(&mut self) {
+      if !self.state.player.is_playing {
+        return;
+      }
+
+      let elapsed =
+        self.last_player_update
+        .elapsed()
+        .as_millis() as u32;
+
+      self.state.player.progress_ms =
+        self.state
+        .player
+        .progress_ms
+        .saturating_add(elapsed);
+
+      self.last_player_update =
+        std::time::Instant::now();
+
+      if let Ok(duration) =
+        self.state.player.get_duration()
+      {
+        self.state.player.progress_ms =
+          self.state.player.progress_ms.min(duration);
+      }
     }
-  }
 
-  fn get_history_track(&self) -> Result<&Track, Error> {
-    let Some(index) = self.history_state.selected() else {
-      return Err("No history selected track".into());
-    };
+    // ------------------------------------------------------------------------
+    // Async Spotify operations
+    // ------------------------------------------------------------------------
 
-    let Some(track) = self
-      .spotify
-      .history
-      .as_ref()
-      .and_then(|history| {
-        history
+    fn spawn_refresh(&self) {
+      let spotify = self.spotify.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        match spotify.refresh().await {
+          Ok(state) => {
+            let _ = tx.send(
+              Action::SpotifyStateUpdated {
+                state,
+              },
+            );
+          }
+
+          Err(error) => {
+            let _ = tx.send(
+              Action::Error(
+                format!(
+                  "Refresh failed: {error}"
+                ),
+              ),
+            );
+          }
+        }
+      });
+    }
+
+    fn spawn_pause(&self) {
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify.pause(&player).await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_resume(&self) {
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify.resume(&player).await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_next(&self) {
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify.next(&player).await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        // Give Spotify a moment to start the new track.
+        time::sleep(
+          Duration::from_millis(500),
+        )
+          .await;
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_previous(&self) {
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify.previous(&player).await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        time::sleep(
+          Duration::from_millis(500),
+        )
+          .await;
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_volume_up(&self) {
+      let volume =
+        self.get_volume_percent()
+        .unwrap_or(0)
+        .saturating_add(10)
+        .min(100);
+
+      self.spawn_volume(volume);
+    }
+
+    fn spawn_volume_down(&self) {
+      let volume =
+        self.get_volume_percent()
+        .unwrap_or(0)
+        .saturating_sub(10);
+
+      self.spawn_volume(volume);
+    }
+
+    fn spawn_mute(&self) {
+      self.spawn_volume(0);
+    }
+
+    fn spawn_volume(&self, volume: u8) {
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify.volume(&player, volume).await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_shuffle(&self) {
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify.shuffle(&player).await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_repeat(&self) {
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify.repeat(&player).await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_play_queue(&self) {
+      let Some(index) =
+        self.queue_state.selected()
+        else {
+          return;
+        };
+
+        let Some(track) =
+          self.state
+          .queue
+          .as_ref()
+          .and_then(|queue| {
+            queue.queue.get(index)
+          })
+        else {
+          return;
+        };
+
+        let uri = track.uri.clone();
+
+        let context_uri =
+          self.get_context_uri()
+          .unwrap_or_default();
+
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify
+            .play(
+              &player,
+              &uri,
+              &context_uri,
+            )
+            .await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_play_history(&self) {
+      let Some(index) =
+        self.history_state.selected()
+        else {
+          return;
+        };
+
+        let Some(track) =
+          self.state
+          .history
+          .as_ref()
+          .and_then(|history| {
+            history
+              .items
+              .iter()
+              .filter_map(|item| {
+                item.track.as_ref()
+              })
+            .nth(index)
+          })
+        else {
+          return;
+        };
+
+        let uri = track.uri.clone();
+
+        let context_uri =
+          self.get_context_uri()
+          .unwrap_or_default();
+
+      let spotify = self.spotify.clone();
+      let player = self.state.player.clone();
+      let tx = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        if let Err(error) =
+          spotify
+            .play(
+              &player,
+              &uri,
+              &context_uri,
+            )
+            .await
+        {
+          let _ = tx.send(
+            Action::Error(
+              error.to_string(),
+            ),
+          );
+          return;
+        }
+
+        let _ = tx.send(Action::Refresh);
+      });
+    }
+
+    fn spawn_queue_history(&self) {
+      let Some(index) =
+        self.history_state.selected()
+        else {
+          return;
+        };
+
+        let Some(track) =
+          self.state
+          .history
+          .as_ref()
+          .and_then(|history| {
+            history
+              .items
+              .iter()
+              .filter_map(|item| {
+                item.track.as_ref()
+              })
+            .nth(index)
+          })
+        else {
+          return;
+        };
+
+        let uri = track.uri.clone();
+
+        let spotify = self.spotify.clone();
+        let player = self.state.player.clone();
+        let tx = self.action_tx.clone();
+
+        tokio::spawn(async move {
+          if let Err(error) =
+            spotify.queue(&player, &uri).await
+          {
+            let _ = tx.send(
+              Action::Error(
+                error.to_string(),
+              ),
+            );
+            return;
+          }
+
+          let _ = tx.send(Action::Refresh);
+        });
+    }
+
+    // ------------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------------
+
+    fn get_volume_percent(&self) -> Result<u8, Error> {
+      self.state
+        .player
+        .device
+        .as_ref()
+        .map(|device| device.volume_percent)
+        .ok_or_else(|| {
+          "No Spotify device found".into()
+        })
+    }
+
+    fn get_context_uri(&self) -> Result<String, Error> {
+      self.state
+        .player
+        .context
+        .as_ref()
+        .map(|context| context.uri.clone())
+        .ok_or_else(|| {
+          "No track context".into()
+        })
+    }
+
+    fn clamp_selection(&mut self) {
+      if let Some(queue) = &self.state.queue {
+        if queue.queue.is_empty() {
+          self.queue_state.select(None);
+        } else if let Some(index) =
+          self.queue_state.selected()
+        {
+          if index >= queue.queue.len() {
+            self.queue_state
+              .select(Some(queue.queue.len() - 1));
+          }
+        }
+      }
+
+      if let Some(history) = &self.state.history {
+        let count = history
           .items
           .iter()
-          .filter_map(|played_track| played_track.track.as_ref())
-          .nth(index)
-      })
-    else {
-      return Err("Failed to get history track".into());
-    };
+          .filter(|item| item.track.is_some())
+          .count();
 
-    Ok(track)
-  }
+        if count == 0 {
+          self.history_state.select(None);
+        } else if let Some(index) =
+          self.history_state.selected()
+        {
+          if index >= count {
+            self.history_state
+              .select(Some(count - 1));
+          }
+        }
+      }
+    }
 
-  fn get_queue_track(&self) -> Result<&Track, Error> {
-    let Some(index) = self.queue_state.selected() else {
-      return Err("No queue selected track".into());
-    };
+    // ------------------------------------------------------------------------
+    // Drawing
+    // ------------------------------------------------------------------------
 
-    let Some(track) = self
-      .spotify
-      .queue
-      .as_ref()
-      .and_then(|queue| queue.queue.get(index))
-      .map(|track| track)
-      else {
-        return Err("Failed to get queue track".into());
+    fn draw(&mut self, frame: &mut Frame) {
+      frame.render_widget(
+        self,
+        frame.area(),
+      );
+    }
+
+    fn render_player(
+      &self,
+      area: Rect,
+      buf: &mut Buffer,
+    ) {
+      let focus = match self.focus.lock() {
+        Ok(focus) => *focus,
+        Err(_) => return,
       };
 
-    Ok(track)
-  }
-
-  fn handle_queue_key_event(&mut self, key_event: KeyEvent) {
-    match key_event.code {
-      KeyCode::Enter => {
-        if let Ok(track) = self.get_queue_track() {
-          let uri = track.uri.clone();
-
-          let context_uri = self.spotify.get_context_uri()
-            .unwrap_or("".to_string());
-
-          if let Err(err) = self.spotify.play(&uri, &context_uri) {
-            self.error = Some(err.to_string());
-          }
-
-          self.focus = Focus::Player;
-        }
-      }
-      KeyCode::Down | KeyCode::Char('j') => {
-        self.queue_state.select_next();
-      }
-      KeyCode::Up | KeyCode::Char('k') => {
-        self.queue_state.select_previous();
-      }
-      KeyCode::Home => {
-        self.queue_state.select_first();
-      }
-      KeyCode::End => {
-        self.queue_state.select_last();
-      }
-      _ => { return; }
-    }
-
-    if let Err(err) = self.spotify.update() {
-      self.error = Some(err.to_string());
-    }
-  }
-
-  fn handle_history_key_event(&mut self, key_event: KeyEvent) {
-    match key_event.code {
-      KeyCode::Enter => {
-        if let Ok(track) = self.get_history_track() {
-          let uri = track.uri.clone();
-
-          let context_uri = self.spotify.get_context_uri()
-            .unwrap_or("".to_string());
-
-          if let Err(err) = self.spotify.play(&uri, &context_uri) {
-            self.error = Some(err.to_string());
-          }
-
-          self.focus = Focus::Player;
-        }
-      },
-      KeyCode::Left | KeyCode::Char('h') => {
-        if let Ok(track) = self.get_history_track() {
-          let uri = track.uri.clone();
-
-          if let Err(err) = self.spotify.queue(&uri) {
-            self.error = Some(err.to_string());
-          }
-        }
-      },
-      KeyCode::Down | KeyCode::Char('j') => {
-        self.history_state.select_next();
-      }
-      KeyCode::Up | KeyCode::Char('k') => {
-        self.history_state.select_previous();
-      }
-      KeyCode::Home => {
-        self.history_state.select_first();
-      }
-      KeyCode::End => {
-        self.history_state.select_last();
-      }
-      _ => { return; }
-    }
-
-    if let Err(err) = self.spotify.update() {
-      self.error = Some(err.to_string());
-    }
-  }
-
-  fn handle_key_event(&mut self, key_event: KeyEvent) {
-    match key_event.code {
-      KeyCode::Char('q') => self.exit(),
-      KeyCode::Tab => {
-        self.focus = self.focus.next();
-      },
-      KeyCode::BackTab => {
-        self.focus = self.focus.prev();
-      },
-      _ => {
-        match self.focus {
-          Focus::Player  => self.handle_player_key_event(key_event),
-          Focus::Queue   => self.handle_queue_key_event(key_event),
-          Focus::History => self.handle_history_key_event(key_event),
-        }
-      }
-    }
-  }
-
-  /// updates the application's state based on user input
-  fn handle_events(&mut self) -> io::Result<()> {
-    match event::read()? {
-      // it's important to check that the event is a key press event as
-      // crossterm also emits key release and repeat events on Windows.
-      Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-        self.handle_key_event(key_event)
-      }
-      _ => {}
-    };
-    Ok(())
-  }
-
-  fn render_player(&self, area: Rect, buf: &mut Buffer) {
-    let color = if self.focus == Focus::Player {
-      Color::Green
-    } else {
-      Color::White
-    };
-
-    let block = Self::panel(" Player ", color);
-
-    block.clone().render(area, buf);
-
-    let inner = block.inner(area);
-
-    let [text_area, gauge_area] = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
-
-    let text = match &self.spotify.player.item {
-      Some(track) => {
-        let artists = track
-          .artists
-          .iter()
-          .map(|artist| artist.name.as_str())
-          .collect::<Vec<_>>()
-          .join(", ");
-
-        Text::from(vec![
-          Line::from(track.name.as_str().bold()),
-          Line::from(artists),
-        ])
-      }
-      None => Text::from("No track playing"),
-    };
-
-    let volume_percent = self.spotify.get_volume_percent().unwrap_or(0);
-    let volume_text = Text::from(format!("{}%", volume_percent.to_string()));
-
-    Paragraph::new(volume_text)
-      .right_aligned()
-      .render(text_area, buf);
-
-    Paragraph::new(text)
-      .centered()
-      .render(text_area, buf);
-
-    let ratio = if let Ok(duration_ms) = self.spotify.player.get_duration() {
-      self.spotify.player.progress_ms as f64 / duration_ms as f64
-    } else {
-      0.0
-    };
-
-    let gauge = LineGauge::default()
-      .filled_style(Style::default().fg(Color::Green))
-      .unfilled_style(Style::default().fg(Color::DarkGray))
-      .ratio(ratio);
-
-    gauge.render(gauge_area, buf);
-  }
-
-  fn render_queue(&mut self, area: Rect, buf: &mut Buffer) {
-    let color = if self.focus == Focus::Queue { Color::Green } else { Color::White };
-    let block = Self::panel(" Queue ", color);
-
-    let header = Row::new([
-      Cell::from("  #".to_uppercase().cyan()),
-      Cell::from("Track".to_uppercase().cyan()),
-      Cell::from("Playing in".to_uppercase().cyan()),
-    ])
-      .bold();
-
-    let mut remaining_ms = self.spotify.player.get_remaining().unwrap_or(0);
-
-    let rows = match &self.spotify.queue {
-      Some(queue) if !queue.queue.is_empty() => {
-        queue.queue
-          .iter()
-          .enumerate()
-          .map(|(index, track)| {
-            let time_str = format_ms(remaining_ms);
-
-            remaining_ms += track.duration_ms;
-
-            Row::new([
-              Cell::from(format!("+{:0>2}", index + 1)),
-              Cell::from(track.name.as_str()),
-              Cell::from(time_str),
-            ])
-          })
-        .collect::<Vec<_>>()
-      }
-
-      _ => {
-        vec![Row::new([
-          Cell::from(""),
-          Cell::from("No queue"),
-          Cell::from(""),
-        ])]
-      }
-    };
-
-    let table = Table::new(rows,
-      [
-      Constraint::Length(4),
-      Constraint::Min(1),
-      Constraint::Length(30),
-      ],
-    )
-      .header(header)
-      .column_spacing(1)
-      .block(block)
-      .style(Style::default().fg(Color::White))
-      .row_highlight_style(Style::default().bg(Color::Gray));
-
-    StatefulWidget::render(
-      table,
-      area,
-      buf,
-      &mut self.queue_state,
-    );
-  }
-
-  fn render_history(&mut self, area: Rect, buf: &mut Buffer) {
-    let color = if self.focus == Focus::History { Color::Green } else { Color::White };
-    let block = Self::panel(" History ", color);
-
-    let header = Row::new([
-      Cell::from("  #".to_uppercase().cyan()),
-      Cell::from("Track".to_uppercase().cyan()),
-      Cell::from("Played ago".to_uppercase().cyan()),
-    ])
-      .bold();
-
-    let rows = match &self.spotify.history {
-      Some(history) if !history.items.is_empty() => {
-        let items = history
-          .items
-          .iter()
-          .filter_map(|played_track| {
-            played_track
-              .track
-              .as_ref()
-              .map(|track| (played_track, track))
-          })
-        .enumerate()
-          .map(|(index, (played_track, track))| {
-            let order_str = (index + 1).to_string();
-
-            let time_str = format_ms(played_track.get_elapsed());
-
-            Row::new([
-              Cell::from(format!("-{:0>2}", order_str)),
-              Cell::from(track.name.as_str()),
-              Cell::from(time_str),
-            ])
-          })
-        .collect::<Vec<_>>();
-
-        if items.is_empty() {
-          vec![Row::new([
-            Cell::from(""),
-            Cell::from("No history"),
-            Cell::from(""),
-          ])]
+      let color =
+        if focus == Focus::Player {
+          Color::Green
         } else {
-          items
+          Color::White
+        };
+
+      let block =
+        Self::panel(" Player ", color);
+
+      block.clone().render(area, buf);
+
+      let inner = block.inner(area);
+
+      let [text_area, gauge_area] =
+        Layout::vertical([
+          Constraint::Min(1),
+          Constraint::Length(1),
+        ])
+        .areas(inner);
+
+      let text =
+        match &self.state.player.item {
+          Some(track) => {
+            let artists =
+              track
+              .artists
+              .iter()
+              .map(|artist| {
+                artist.name.as_str()
+              })
+            .collect::<Vec<_>>()
+              .join(", ");
+
+            Text::from(vec![
+              Line::from(
+                track
+                .name
+                .as_str()
+                .bold(),
+              ),
+              Line::from(artists),
+            ])
+          }
+
+          None => {
+            Text::from(
+              "No track playing"
+            )
+          }
+        };
+
+      let volume_percent =
+        self.get_volume_percent()
+        .unwrap_or(0);
+
+      Paragraph::new(
+        format!("{volume_percent}%"),
+      )
+        .right_aligned()
+        .render(text_area, buf);
+
+      Paragraph::new(text)
+        .centered()
+        .render(text_area, buf);
+
+      let ratio =
+        if let Ok(duration_ms) =
+          self.state.player.get_duration()
+        {
+          if duration_ms == 0 {
+            0.0
+          } else {
+            (
+              self.state
+              .player
+              .progress_ms
+              .min(duration_ms)
+            ) as f64
+              / duration_ms as f64
+          }
+        } else {
+          0.0
+        };
+
+      let gauge =
+        LineGauge::default()
+        .filled_style(
+          Style::default()
+          .fg(Color::Green),
+        )
+        .unfilled_style(
+          Style::default()
+          .fg(Color::DarkGray),
+        )
+        .ratio(ratio);
+
+      gauge.render(gauge_area, buf);
+    }
+
+    fn render_queue(
+      &mut self,
+      area: Rect,
+      buf: &mut Buffer,
+    ) {
+      let focus = match self.focus.lock() {
+        Ok(focus) => *focus,
+        Err(_) => return,
+      };
+
+      let color =
+        if focus == Focus::Queue {
+          Color::Green
+        } else {
+          Color::White
+        };
+
+      let block =
+        Self::panel(" Queue ", color);
+
+      let header = Row::new([
+        Cell::from(
+          "  #".to_uppercase().cyan()
+        ),
+        Cell::from(
+          "Track".to_uppercase().cyan()
+        ),
+        Cell::from(
+          "Playing in"
+          .to_uppercase()
+          .cyan(),
+        ),
+      ])
+        .bold();
+
+      let mut remaining_ms =
+        self.state
+        .player
+        .get_remaining()
+        .unwrap_or(0);
+
+      let rows =
+        match &self.state.queue {
+          Some(queue)
+            if !queue.queue.is_empty() =>
+            {
+              queue
+                .queue
+                .iter()
+                .enumerate()
+                .map(
+                  |(index, track)| {
+                    let time_str =
+                      format_ms(
+                        remaining_ms,
+                      );
+
+                    remaining_ms =
+                      remaining_ms
+                      .saturating_add(
+                        track
+                        .duration_ms,
+                      );
+
+                    Row::new([
+                      Cell::from(
+                        format!(
+                          "+{:0>2}",
+                          index + 1
+                        ),
+                      ),
+                      Cell::from(
+                        track
+                        .name
+                        .as_str(),
+                      ),
+                      Cell::from(
+                        time_str
+                      ),
+                    ])
+                  },
+              )
+                .collect::<Vec<_>>()
+            }
+
+          _ => {
+            vec![
+              Row::new([
+                Cell::from(""),
+                Cell::from(
+                  "No queue",
+                ),
+                Cell::from(""),
+              ])
+            ]
+            }
+        };
+
+      let table =
+        Table::new(
+          rows,
+          [
+          Constraint::Length(4),
+          Constraint::Min(1),
+          Constraint::Length(30),
+          ],
+        )
+        .header(header)
+        .column_spacing(1)
+        .block(block)
+        .style(
+          Style::default()
+          .fg(Color::White),
+        )
+        .row_highlight_style(
+          Style::default()
+          .bg(Color::Gray),
+        );
+
+      StatefulWidget::render(
+        table,
+        area,
+        buf,
+        &mut self.queue_state,
+      );
+    }
+
+    fn render_history(
+      &mut self,
+      area: Rect,
+      buf: &mut Buffer,
+    ) {
+      let focus = match self.focus.lock() {
+        Ok(focus) => *focus,
+        Err(_) => return,
+      };
+
+      let color =
+        if focus == Focus::History {
+          Color::Green
+        } else {
+          Color::White
+        };
+
+      let block =
+        Self::panel(" History ", color);
+
+      let header = Row::new([
+        Cell::from(
+          "  #".to_uppercase().cyan()
+        ),
+        Cell::from(
+          "Track".to_uppercase().cyan()
+        ),
+        Cell::from(
+          "Played ago"
+          .to_uppercase()
+          .cyan(),
+        ),
+      ])
+        .bold();
+
+      let rows =
+        match &self.state.history {
+          Some(history)
+            if !history.items.is_empty() =>
+            {
+              let items =
+                history
+                .items
+                .iter()
+                .filter_map(
+                  |played_track| {
+                    played_track
+                      .track
+                      .as_ref()
+                      .map(|track| {
+                        (
+                          played_track,
+                          track,
+                        )
+                      })
+                  },
+                )
+                .enumerate()
+                .map(
+                  |(
+                    index,
+                    (
+                      played_track,
+                      track,
+                    ),
+                  )| {
+                    let time_str =
+                      format_ms(
+                        played_track
+                        .get_elapsed(),
+                      );
+
+                    Row::new([
+                      Cell::from(
+                        format!(
+                          "-{:0>2}",
+                          index + 1
+                        ),
+                      ),
+                      Cell::from(
+                        track
+                        .name
+                        .as_str(),
+                      ),
+                      Cell::from(
+                        time_str
+                      ),
+                    ])
+                  },
+                  )
+                    .collect::<Vec<_>>();
+
+              if items.is_empty() {
+                vec![
+                  Row::new([
+                    Cell::from(""),
+                    Cell::from(
+                      "No history",
+                    ),
+                    Cell::from(""),
+                  ])
+                ]
+              } else {
+                items
+              }
+            }
+
+          _ => {
+            vec![
+              Row::new([
+                Cell::from(""),
+                Cell::from(
+                  "No history",
+                ),
+                Cell::from(""),
+              ])
+            ]
+          }
+        };
+
+      let table =
+        Table::new(
+          rows,
+          [
+          Constraint::Length(4),
+          Constraint::Min(1),
+          Constraint::Length(30),
+          ],
+        )
+        .header(header)
+        .column_spacing(1)
+        .block(block)
+        .style(
+          Style::default()
+          .fg(Color::White),
+        )
+        .row_highlight_style(
+          Style::default()
+          .bg(Color::Gray),
+        );
+
+      StatefulWidget::render(
+        table,
+        area,
+        buf,
+        &mut self.history_state,
+      );
+    }
+
+    fn render_instructions(
+      &self,
+      area: Rect,
+      buf: &mut Buffer,
+    ) {
+      let focus = match self.focus.lock() {
+        Ok(focus) => *focus,
+        Err(_) => return,
+      };
+
+      let instructions =
+        match focus {
+          Focus::Player => {
+            Line::from(
+              "Space Pause/Resume | Enter Refresh | h/← Previous | l/→ Next | ↑/↓ Volume | m Mute | s Shuffle | r Repeat",
+            )
+          }
+
+          Focus::Queue => {
+            Line::from(
+              "Enter Play | ↑/k Up | ↓/j Down | Home/End Jump",
+            )
+          }
+
+          Focus::History => {
+            Line::from(
+              "Enter Play | h/← Queue | ↑/k Up | ↓/j Down | Home/End Jump",
+            )
+          }
         }
-      }
-
-      _ => vec![Row::new([
-        Cell::from(""),
-        Cell::from("No history"),
-        Cell::from(""),
-      ])],
-    };
-
-    // Make sure the selected row is still valid if the history changes.
-    if rows.is_empty() {
-      self.history_state.select(None);
-    } else if let Some(selected) = self.history_state.selected() {
-      if selected >= rows.len() {
-        self.history_state.select(Some(rows.len() - 1));
-      }
-    }
-
-    let table = Table::new(
-      rows,
-      [
-      Constraint::Length(4),
-      Constraint::Min(1),
-      Constraint::Length(30),
-      ],
-    )
-      .header(header)
-      .column_spacing(1)
-      .block(block)
-      .style(Style::default().fg(Color::White))
-      .row_highlight_style(Style::default().bg(Color::Gray));
-
-    StatefulWidget::render(
-      table,
-      area,
-      buf,
-      &mut self.history_state,
-    );
-  }
-
-  fn render_instructions(&self, area: Rect, buf: &mut Buffer) {
-    let instructions = match &self.focus {
-      Focus::Player => {
-        Line::from("_ Pause/Resume | ↵ Refresh | h/← Previous | l/→ Next | s Toggle Shuffle | R Toggle Repeat")
-      }
-      Focus::Queue => {
-        Line::from("↵ Play | ↑ Up | ↓ Down | ⌦ Remove")
-      }
-      Focus::History => {
-        Line::from("↵ Play | ↑ Up | ↓ Down")
-      }
-    }
       .blue();
 
-    Paragraph::new(instructions)
-      .centered()
-      .wrap(Wrap { trim: true })
-      .render(area, buf);
+      Paragraph::new(instructions)
+        .centered()
+        .wrap(Wrap { trim: true })
+        .render(area, buf);
+    }
+
+    fn render_error(
+      &self,
+      area: Rect,
+      buf: &mut Buffer,
+    ) {
+      let error =
+        self.error
+        .as_deref()
+        .unwrap_or("")
+        .red();
+
+      Paragraph::new(Line::from(error))
+        .wrap(Wrap { trim: true })
+        .render(area, buf);
+    }
+
+    fn panel(
+      title: &str,
+      color: Color,
+    ) -> Block<'static> {
+      Block::bordered()
+        .title(
+          Line::from(
+            format!(" {title} ")
+            .bold(),
+          )
+          .left_aligned(),
+        )
+        .border_type(
+          BorderType::Thick
+        )
+        .border_style(
+          Style::default()
+          .fg(color),
+        )
+    }
   }
 
-  fn render_error(&self, area: Rect, buf: &mut Buffer) {
-    let error = self.error.as_deref().unwrap_or("").red();
 
-    Paragraph::new(Line::from(error))
-      .wrap(Wrap { trim: true })
-      .render(area, buf);
-  }
-
-  fn panel(title: &str, color: Color) -> Block<'static> {
-    Block::bordered()
-      .title(Line::from(format!(" {title} ").bold()).left_aligned())
-      .border_type(BorderType::Thick)
-      .border_style(Style::default().fg(color))
-  }
-}
+// ============================================================================
+// Widget implementation
+// ============================================================================
 
 impl Widget for &mut App {
-  fn render(self, area: Rect, buf: &mut Buffer) {
-    let [player_area, content_area, instructions_area, error_area] =
+  fn render(
+    self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let [
+      player_area,
+      content_area,
+      instructions_area,
+      error_area,
+    ] =
       Layout::vertical([
         Constraint::Length(5),
         Constraint::Min(5),
@@ -1254,28 +2202,289 @@ impl Widget for &mut App {
       .margin(1)
       .areas(area);
 
-    // Queue + history side-by-side.
-    let [queue_area, history_area] = Layout::horizontal([
-      Constraint::Percentage(60),
-      Constraint::Percentage(40),
-    ])
+    let [
+      queue_area,
+      history_area,
+    ] =
+      Layout::horizontal([
+        Constraint::Percentage(60),
+        Constraint::Percentage(40),
+      ])
       .areas(content_area);
 
-    self.render_player(player_area, buf);
-    self.render_queue(queue_area, buf);
-    self.render_history(history_area, buf);
-    self.render_instructions(instructions_area, buf);
-    self.render_error(error_area, buf);
+    self.render_player(
+      player_area,
+      buf,
+    );
+
+    self.render_queue(
+      queue_area,
+      buf,
+    );
+
+    self.render_history(
+      history_area,
+      buf,
+    );
+
+    self.render_instructions(
+      instructions_area,
+      buf,
+    );
+
+    self.render_error(
+      error_area,
+      buf,
+    );
   }
 }
 
+
+// ============================================================================
+// Keyboard handling
+// ============================================================================
+
+fn player_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Enter => {
+      Action::Refresh
+    }
+
+    KeyCode::Char(' ') => {
+      Action::PauseResume
+    }
+
+    KeyCode::Right
+      | KeyCode::Char('l') => {
+        Action::Next
+      }
+
+    KeyCode::Left
+      | KeyCode::Char('h') => {
+        Action::Previous
+      }
+
+    KeyCode::Down
+      | KeyCode::Char('j') => {
+        Action::VolumeDown
+      }
+
+    KeyCode::Up
+      | KeyCode::Char('k') => {
+        Action::VolumeUp
+      }
+
+    KeyCode::Char('m') => {
+      Action::Mute
+    }
+
+    KeyCode::Char('s') => {
+      Action::ToggleShuffle
+    }
+
+    KeyCode::Char('r') => {
+      Action::ToggleRepeat
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn queue_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Enter => {
+      Action::PlayQueue
+    }
+
+    KeyCode::Down
+      | KeyCode::Char('j') => {
+        Action::QueueMoveNext
+      }
+
+    KeyCode::Up
+      | KeyCode::Char('k') => {
+        Action::QueueMovePrevious
+      }
+
+    KeyCode::Home => {
+      Action::QueueFirst
+    }
+
+    KeyCode::End => {
+      Action::QueueLast
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn history_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Enter => {
+      Action::PlayHistory
+    }
+
+    KeyCode::Left | KeyCode::Char('h') => {
+      Action::QueueHistory
+    }
+
+    KeyCode::Down | KeyCode::Char('j') => {
+      Action::HistoryMoveNext
+    }
+
+    KeyCode::Up | KeyCode::Char('k') => {
+      Action::HistoryMovePrevious
+    }
+
+    KeyCode::Home => {
+      Action::HistoryFirst
+    }
+
+    KeyCode::End => {
+      Action::HistoryLast
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn key_to_action(
+  focus: Focus,
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Char('q') => {
+      return Action::Quit;
+    }
+
+    KeyCode::Tab => {
+      return Action::FocusNext;
+    }
+
+    KeyCode::BackTab => {
+      return Action::FocusPrevious;
+    }
+
+    _ => {}
+  }
+
+  match focus {
+    Focus::Player => {
+      player_key_action(key)
+    }
+
+    Focus::Queue => {
+      queue_key_action(key)
+    }
+
+    Focus::History => {
+      history_key_action(key)
+    }
+  }
+}
+
+
+// ============================================================================
+// Crossterm event task
+// ============================================================================
+
+fn spawn_event_handler(
+  tx: UnboundedSender<Action>,
+  app_focus: Arc<Mutex<Focus>>,
+) {
+  tokio::spawn(async move {
+    loop {
+      let event_result =
+        tokio::task::spawn_blocking(
+          event::read,
+        )
+        .await;
+
+      let event = match event_result {
+        Ok(Ok(event)) => event,
+
+        Ok(Err(error)) => {
+          let _ = tx.send(
+            Action::Error(
+              format!(
+                "Terminal event error: {error}"
+              ),
+            ),
+          );
+
+          return;
+        }
+
+        Err(error) => {
+          let _ = tx.send(
+            Action::Error(
+              format!(
+                "Event task error: {error}"
+              ),
+            ),
+          );
+
+          return;
+        }
+      };
+
+      let Event::Key(key) = event
+        else {
+          continue;
+        };
+
+        if key.kind != KeyEventKind::Press {
+          continue;
+        }
+
+        let focus = match app_focus.lock() {
+          Ok(focus) => *focus,
+          Err(_) => return,
+        };
+
+        let action = key_to_action(focus, key);
+
+        if tx.send(action).is_err() {
+          return;
+        }
+    }
+  });
+}
+
+
+// ============================================================================
 // Main
-fn main() -> Result<(), Error> {
+// ============================================================================
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
   dotenvy::dotenv().ok();
 
-  let mut app = App::new()?;
+  let (action_tx, action_rx) =
+    mpsc::unbounded_channel::<Action>();
 
-  ratatui::run(|terminal| app.run(terminal))?;
+  let mut app = App::new(action_tx.clone()).await?;
 
-  Ok(())
+  spawn_event_handler(
+    action_tx.clone(),
+    app.focus.clone(),
+  );
+
+  let mut terminal =
+    ratatui::init();
+
+  let result = app.run(
+    &mut terminal,
+    action_rx,
+  ).await;
+
+  ratatui::restore();
+
+  result
 }
