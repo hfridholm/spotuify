@@ -60,6 +60,9 @@ use ratatui::{
     BorderType,
     Cell,
     LineGauge,
+    List,
+    ListItem,
+    ListState,
     Paragraph,
     Row,
     StatefulWidget,
@@ -1003,15 +1006,20 @@ enum Action {
   ToggleShuffle,
   ToggleRepeat,
 
-  QueueMoveNext,
-  QueueMovePrevious,
+  QueueNext,
+  QueuePrevious,
   QueueFirst,
   QueueLast,
 
-  HistoryMoveNext,
-  HistoryMovePrevious,
-  HistoryFirst,
-  HistoryLast,
+  TableNext,
+  TablePrevious,
+  TableFirst,
+  TableLast,
+
+  List1Next,
+  List1Previous,
+  List1First,
+  List1Last,
 
   PlayQueue,
 
@@ -1021,6 +1029,12 @@ enum Action {
 
   SpotifyStateUpdated {
     state: SpotifyState,
+  },
+
+  HomeEnter,
+
+  EnterWindow {
+    window: AppWindow,
   },
 
   Error(String),
@@ -1038,9 +1052,11 @@ struct App {
   block:         Arc<Mutex<AppBlock>>,
   window:        Arc<Mutex<AppWindow>>,
 
-  queue_state:   TableState,
-  history_state: TableState, // Replace this with:
-  // list_states: (TableState, TableState),
+  queue_state: TableState,
+  table_state: TableState,
+
+  list1_state: ListState,
+  list2_state: ListState,
 
   action_tx:     UnboundedSender<Action>,
 
@@ -1066,8 +1082,11 @@ impl App {
       focus:  Arc::new(Mutex::new(AppFocus::Player)),
       window: Arc::new(Mutex::new(AppWindow::Home)),
 
-      queue_state:   TableState::default(),
-      history_state: TableState::default(),
+      queue_state: TableState::default(),
+      table_state: TableState::default(),
+
+      list1_state: ListState::default(),
+      list2_state: ListState::default(),
 
       action_tx,
 
@@ -1249,11 +1268,27 @@ impl App {
         self.spawn_repeat();
       }
 
-      Action::QueueMoveNext => {
+      Action::TableNext => {
+        self.table_state.select_next();
+      }
+
+      Action::TablePrevious => {
+        self.table_state.select_previous();
+      }
+
+      Action::TableFirst => {
+        self.table_state.select_first();
+      }
+
+      Action::TableLast => {
+        self.table_state.select_last();
+      }
+
+      Action::QueueNext => {
         self.queue_state.select_next();
       }
 
-      Action::QueueMovePrevious => {
+      Action::QueuePrevious => {
         self.queue_state.select_previous();
       }
 
@@ -1265,20 +1300,36 @@ impl App {
         self.queue_state.select_last();
       }
 
-      Action::HistoryMoveNext => {
-        self.history_state.select_next();
+      Action::List1Next => {
+        self.list1_state.select_next();
       }
 
-      Action::HistoryMovePrevious => {
-        self.history_state.select_previous();
+      Action::List1Previous => {
+        self.list1_state.select_previous();
       }
 
-      Action::HistoryFirst => {
-        self.history_state.select_first();
+      Action::List1First => {
+        self.list1_state.select_first();
       }
 
-      Action::HistoryLast => {
-        self.history_state.select_last();
+      Action::List1Last => {
+        self.list1_state.select_last();
+      }
+
+      Action::HomeEnter => {
+        let Some(index) =
+          self.list1_state.selected()
+        else {
+          return;
+        };
+
+        match index {
+          0 => self.set_window(AppWindow::History),
+
+          1 => self.set_window(AppWindow::History),
+
+          _ => {},
+        }
       }
 
       Action::PlayQueue => {
@@ -1303,6 +1354,10 @@ impl App {
 
       Action::Error(error) => {
         self.error_list.push_back(error);
+      }
+
+      Action::EnterWindow { window } => {
+        self.set_window(window);
       }
     }
   }
@@ -1544,7 +1599,7 @@ impl App {
 
   fn spawn_play_history(&self) {
     let Some(index) =
-      self.history_state.selected()
+      self.list1_state.selected()
     else {
       return;
     };
@@ -1593,7 +1648,7 @@ impl App {
 
   fn spawn_queue_history(&self) {
     let Some(index) =
-      self.history_state.selected()
+      self.list1_state.selected()
     else {
       return;
     };
@@ -1669,23 +1724,6 @@ impl App {
         }
       }
     }
-
-    if let Some(history) = &self.state.history {
-      let count = history
-        .items
-        .iter()
-        .filter(|item| item.track.is_some())
-        .count();
-
-      if count == 0 {
-        self.history_state.select(None);
-      }
-      else if let Some(index) = self.history_state.selected() {
-        if index >= count {
-          self.history_state.select(Some(count - 1));
-        }
-      }
-    }
   }
 
   // ------------------------------------------------------------------------
@@ -1711,7 +1749,7 @@ impl App {
       Err(_) => AppWindow::Home,
     };
 
-    let selected = TABS.iter().position(|(window, _)| *window == app_window).unwrap_or(0);
+    let selected = TABS.iter().position(|(window, _)| *window == app_window);
 
     let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
       + (TABS.len() as u16 - 1) * 3 + 1;
@@ -1754,13 +1792,13 @@ impl App {
       Err(_) => return,
     };
 
-    let color = if app_focus == AppFocus::Player {
-      Color::Green
+    let (color, border_type) = if app_focus == AppFocus::Player {
+      (Color::Green, BorderType::Thick)
     } else {
-      Color::White
+      (Color::White, BorderType::Plain)
     };
 
-    let block = Self::panel(" Player ", color);
+    let block = Self::panel(" Player ", color, border_type);
 
     block.clone().render(area, buf);
 
@@ -1840,13 +1878,13 @@ impl App {
       Err(_) => return,
     };
 
-    let (block_color, header_color) = if app_focus == AppFocus::Queue {
-      (Color::Green, Color::Yellow)
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::Queue {
+      (Color::Green, Color::Yellow, BorderType::Thick)
     } else {
-      (Color::White, Color::White)
+      (Color::White, Color::White, BorderType::Plain)
     };
 
-    let block = Self::panel(" Queue ", block_color);
+    let block = Self::panel(" Queue ", block_color, border_type);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -1938,16 +1976,47 @@ impl App {
   }
 
   fn render_home(
-    &self,
+    &mut self,
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let line = Line::from("Home");
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
 
-    Paragraph::new(line)
-      .centered()
-      .wrap(Wrap { trim: true })
-      .render(area, buf);
+    let (color, border_type) = if app_focus == AppFocus::Home {
+      (Color::Green, BorderType::Thick)
+    } else {
+      (Color::White, BorderType::Plain)
+    };
+
+    let block = Self::panel(" Home ", color, border_type);
+
+    block.clone().render(area, buf);
+
+    let inner = block.inner(area);
+
+    let items = ["History", "History"];
+
+    let list = List::new(
+      items.iter()
+      .map(|item| ListItem::new(*item))
+      .collect::<Vec<_>>(),
+    )
+      .highlight_style(
+        Style::default()
+        .bg(Color::Blue)
+        .fg(Color::White),
+      )
+      .highlight_symbol(">> ");
+
+    StatefulWidget::render(
+      list,
+      inner,
+      buf,
+      &mut self.list1_state,
+    );
   }
 
   fn render_history(
@@ -1960,13 +2029,13 @@ impl App {
       Err(_) => return,
     };
 
-    let (block_color, header_color) = if app_focus == AppFocus::History {
-      (Color::Green, Color::Yellow)
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::History {
+      (Color::Green, Color::Yellow, BorderType::Thick)
     } else {
-      (Color::White, Color::White)
+      (Color::White, Color::White, BorderType::Plain)
     };
 
-    let block = Self::panel(" History ", block_color);
+    let block = Self::panel(" History ", block_color, border_type);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -2048,7 +2117,7 @@ impl App {
       table,
       area,
       buf,
-      &mut self.history_state,
+      &mut self.table_state,
     );
   }
 
@@ -2129,7 +2198,7 @@ impl App {
 
       let mut block = Block::bordered()
         .border_type(
-          BorderType::Thick
+          BorderType::Plain
         )
         .border_style(
           Style::default()
@@ -2163,15 +2232,14 @@ impl App {
   fn panel(
     title: &str,
     color: Color,
+    border_type: BorderType,
   ) -> Block<'static> {
     Block::bordered()
       .title(
         Line::from(format!(" {title} ").bold())
         .left_aligned(),
       )
-      .border_type(
-        BorderType::Thick
-      )
+      .border_type(border_type)
       .border_style(
         Style::default()
         .fg(color),
@@ -2310,6 +2378,34 @@ fn player_key_action(
   }
 }
 
+fn home_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Enter => {
+      Action::HomeEnter
+    }
+
+    KeyCode::Down | KeyCode::Char('j') => {
+      Action::List1Next
+    }
+
+    KeyCode::Up | KeyCode::Char('k') => {
+      Action::List1Previous
+    }
+
+    KeyCode::Home => {
+      Action::List1First
+    }
+
+    KeyCode::End => {
+      Action::List1Last
+    }
+
+    _ => Action::Render,
+  }
+}
+
 fn queue_key_action(
   key: KeyEvent,
 ) -> Action {
@@ -2319,11 +2415,11 @@ fn queue_key_action(
     }
 
     KeyCode::Down | KeyCode::Char('j') => {
-      Action::QueueMoveNext
+      Action::QueueNext
     }
 
     KeyCode::Up | KeyCode::Char('k') => {
-      Action::QueueMovePrevious
+      Action::QueuePrevious
     }
 
     KeyCode::Home => {
@@ -2351,19 +2447,11 @@ fn history_key_action(
     }
 
     KeyCode::Down | KeyCode::Char('j') => {
-      Action::HistoryMoveNext
+      Action::TableNext
     }
 
     KeyCode::Up | KeyCode::Char('k') => {
-      Action::HistoryMovePrevious
-    }
-
-    KeyCode::Home => {
-      Action::HistoryFirst
-    }
-
-    KeyCode::End => {
-      Action::HistoryLast
+      Action::TablePrevious
     }
 
     _ => Action::Render,
@@ -2372,6 +2460,7 @@ fn history_key_action(
 
 fn key_to_action(
   app_focus: AppFocus,
+  app_block: AppBlock,
   key: KeyEvent,
 ) -> Action {
   match key.code {
@@ -2394,6 +2483,20 @@ fn key_to_action(
     _ => {}
   }
 
+  if app_block == AppBlock::Main {
+    match key.code {
+      KeyCode::Char('H') => {
+        return Action::EnterWindow { window: AppWindow::Home };
+      }
+
+      KeyCode::Char('S') => {
+        return Action::EnterWindow { window: AppWindow::Home };
+      }
+
+      _ => {},
+    }
+  }
+
   match app_focus {
     AppFocus::Player => {
       player_key_action(key)
@@ -2408,7 +2511,7 @@ fn key_to_action(
     }
 
     AppFocus::Home => {
-      history_key_action(key)
+      home_key_action(key)
     }
   }
 }
@@ -2419,7 +2522,9 @@ fn key_to_action(
 
 fn spawn_event_handler(
   tx: UnboundedSender<Action>,
-  app_focus: Arc<Mutex<AppFocus>>,
+  app_focus:  Arc<Mutex<AppFocus>>,
+  app_window: Arc<Mutex<AppWindow>>,
+  app_block:  Arc<Mutex<AppBlock>>,
 ) {
   tokio::spawn(async move {
     loop {
@@ -2462,7 +2567,12 @@ fn spawn_event_handler(
         Err(_) => return,
       };
 
-      let action = key_to_action(app_focus, key);
+      let app_block = match app_block.lock() {
+        Ok(app_block) => *app_block,
+        Err(_) => return,
+      };
+
+      let action = key_to_action(app_focus, app_block, key);
 
       if tx.send(action).is_err() {
         return;
@@ -2487,6 +2597,8 @@ async fn main() -> Result<(), Error> {
   spawn_event_handler(
     action_tx.clone(),
     app.focus.clone(),
+    app.window.clone(),
+    app.block.clone(),
   );
 
   let mut terminal = ratatui::init();
