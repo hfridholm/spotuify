@@ -28,6 +28,7 @@ use crossterm::event::{
   KeyCode,
   KeyEvent,
   KeyEventKind,
+  KeyModifiers,
 };
 
 use rand::{
@@ -42,6 +43,7 @@ use ratatui::{
     Layout,
     Rect,
     Direction,
+    Spacing,
   },
   style::{
     Color,
@@ -49,7 +51,11 @@ use ratatui::{
     Stylize,
     Modifier,
   },
-  symbols::border,
+  symbols::{
+    border,
+    merge::MergeStrategy,
+  },
+  symbols,
   text::{
     Line,
     Text,
@@ -303,6 +309,7 @@ fn get_access_token_blocking(
 
 #[derive(Default, Debug, Clone)]
 struct SpotifyState {
+  user:    User,
   player:  Player,
   queue:   Option<Queue>,
   history: Option<History>,
@@ -331,6 +338,13 @@ impl SpotifyApi {
   async fn fetch_state(
     &self,
   ) -> Result<SpotifyState, Error> {
+    /*
+    let user = User::get(
+      &self.client,
+      &self.access_token,
+    ).await?;
+    */
+
     let player = Player::get(
       &self.client,
       &self.access_token,
@@ -349,8 +363,9 @@ impl SpotifyApi {
     */
 
     Ok(SpotifyState {
+      user:    User::default(),
       player,
-      queue: Some(queue),
+      queue:   Some(queue),
       history: None,
     })
   }
@@ -465,6 +480,13 @@ impl SpotifyApi {
 // ============================================================================
 
 #[derive(Default, Debug, Clone, Deserialize)]
+struct User {
+  account_id:   String,
+  display_name: String,
+  uri:          String,
+}
+
+#[derive(Default, Debug, Clone, Deserialize)]
 struct Player {
   device:        Option<Device>,
   progress_ms:   u32,
@@ -511,6 +533,93 @@ impl PlayedTrack {
   }
 }
 
+// Search result
+#[derive(Default, Debug, Clone, Deserialize)]
+struct Search {
+  tracks:    Tracks,
+  // albums:    Albums,
+  // artists:   Artists,
+  // playlists: Playlists,
+  #[serde(skip)]
+  search_type: SearchType,
+  #[serde(skip)]
+  buffer: String,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+enum SearchType {
+  #[default]
+  SearchTrack,
+  SearchArtist,
+  SearchAlbum,
+  SearchPlaylist,
+}
+
+// Spotify: Tracks
+#[derive(Default, Debug, Clone, Deserialize)]
+struct Tracks {
+  limit: u32,
+  total: u32,
+  items: Vec<Track>,
+}
+
+// Spotify: Artists
+#[derive(Default, Debug, Clone, Deserialize)]
+struct Artists {
+  limit: u32,
+  total: u32,
+  items: Vec<Artist>,
+}
+
+// Spotify: Albums
+#[derive(Default, Debug, Clone, Deserialize)]
+struct Albums {
+  limit: u32,
+  total: u32,
+  items: Vec<Album>,
+}
+
+// Spotify: Playlists
+#[derive(Default, Debug, Clone, Deserialize)]
+struct Playlists {
+  limit: u32,
+  total: u32,
+  items: Vec<Playlist>,
+}
+
+impl Search {
+  async fn get(
+    client: &Client,
+    access_token: &str,
+    query: &str,
+  ) -> Result<Self, Error> {
+    let response = client
+      .get("https://api.spotify.com/v1/search")
+      .query(&[
+        ("q", query),
+        ("type", "album,artist,track,playlist"),
+        ("limit", "5"),
+      ])
+      .bearer_auth(access_token)
+      .send()
+      .await?
+      .error_for_status()?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err(
+        "Nothing is currently playing".into()
+      );
+    }
+
+    Ok(
+      response
+      .error_for_status()?
+      .json::<Search>()
+      .await?,
+    )
+  }
+}
+
 #[derive(Default, Debug, Clone, Deserialize)]
 struct Queue {
   currently_playing: Option<Track>,
@@ -522,6 +631,7 @@ struct Context {
   uri: String,
 }
 
+// Spotify: TrackObject
 #[derive(Default, Debug, Clone, Deserialize)]
 struct Track {
   id:          String,
@@ -531,15 +641,69 @@ struct Track {
   artists:     Vec<Artist>,
 }
 
+// Spotify ArtistObject
 #[derive(Default, Debug, Clone, Deserialize)]
 struct Artist {
   id:   String,
   name: String,
 }
 
+// Spotify SimplifiedAlbumObject
+#[derive(Default, Debug, Clone, Deserialize)]
+struct Album {
+  album_type:   String,
+  total_tracks: u32,
+  release_date: String,
+  id:           String,
+  name:         String,
+  artists:      Vec<Artist>,
+}
+
+// Spotify SimplifiedPlaylistObject
+#[derive(Default, Debug, Clone, Deserialize)]
+struct Playlist {
+  id:     String,
+  name:   String,
+  public: bool,
+  items:  PlaylistItems,
+}
+
+// Sub-struct for getting items in playlist
+#[derive(Default, Debug, Clone, Deserialize)]
+struct PlaylistItems {
+  href:  String,
+  total: u32,
+}
+
 // ============================================================================
 // Spotify API implementation
 // ============================================================================
+
+impl User {
+  async fn get(
+    client: &Client,
+    access_token: &str,
+  ) -> Result<Self, Error> {
+    let response = client
+      .get("https://api.spotify.com/v1/me")
+      .bearer_auth(access_token)
+      .send()
+      .await?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err(
+        "No user".into()
+      );
+    }
+
+    Ok(
+      response
+      .error_for_status()?
+      .json::<User>()
+      .await?,
+    )
+  }
+}
 
 impl Player {
   async fn get(
@@ -585,9 +749,7 @@ impl Player {
     access_token: &str,
   ) -> Result<Queue, Error> {
     let response = client
-      .get(
-        "https://api.spotify.com/v1/me/player/queue",
-      )
+      .get("https://api.spotify.com/v1/me/player/queue")
       .bearer_auth(access_token)
       .send()
       .await?;
@@ -610,9 +772,7 @@ impl Player {
     access_token: &str,
   ) -> Result<History, Error> {
     let response = client
-      .get(
-        "https://api.spotify.com/v1/me/player/recently-played",
-      )
+      .get("https://api.spotify.com/v1/me/player/recently-played")
       .bearer_auth(access_token)
       .send()
       .await?;
@@ -640,15 +800,10 @@ impl Player {
     let device = self.device()?;
 
     client
-      .put(
-        "https://api.spotify.com/v1/me/player/volume",
-      )
+      .put("https://api.spotify.com/v1/me/player/volume")
       .query(&[
         ("device_id", &device.id.as_str()),
-        (
-          "volume_percent",
-          &volume_percent.to_string().as_str(),
-        ),
+        ("volume_percent", &volume_percent.to_string().as_str()),
       ])
       .bearer_auth(access_token)
       .header(CONTENT_LENGTH, "0")
@@ -668,9 +823,7 @@ impl Player {
     let device = self.device()?;
 
     client
-      .post(
-        "https://api.spotify.com/v1/me/player/queue",
-      )
+      .post("https://api.spotify.com/v1/me/player/queue")
       .query(&[
         ("device_id", &device.id.as_str()),
         ("uri", &uri),
@@ -928,12 +1081,11 @@ enum AppFocus {
   Queue,
   History,
 
-  /*
   Search,
-  SearchArtists,
-  SearchAlbums,
-  SearchAccounts,
-  */
+  SearchTrack,
+  SearchAlbum,
+  SearchArtist,
+  SearchPlaylist,
 
   Home,
   /*
@@ -991,6 +1143,11 @@ enum Action {
 
   Refresh,
 
+  Up,
+  Down,
+  Right,
+  Left,
+
   BlockNext,
   BlockPrevious,
 
@@ -1022,10 +1179,19 @@ enum Action {
   List1Last,
 
   PlayQueue,
-
+  PlaySearch,
   PlayHistory,
 
   QueueHistory,
+
+  Search,
+  SearchInsert {
+    to_insert: char,
+  },
+  SearchDelete,
+  SearchUpdated {
+    search: Search,
+  },
 
   SpotifyStateUpdated {
     state: SpotifyState,
@@ -1051,6 +1217,8 @@ struct App {
   focus:         Arc<Mutex<AppFocus>>,
   block:         Arc<Mutex<AppBlock>>,
   window:        Arc<Mutex<AppWindow>>,
+
+  search: Search,
 
   queue_state: TableState,
   table_state: TableState,
@@ -1081,6 +1249,8 @@ impl App {
       block:  Arc::new(Mutex::new(AppBlock::Player)),
       focus:  Arc::new(Mutex::new(AppFocus::Player)),
       window: Arc::new(Mutex::new(AppWindow::Home)),
+
+      search: Search::default(),
 
       queue_state: TableState::default(),
       table_state: TableState::default(),
@@ -1148,6 +1318,43 @@ impl App {
   // Action update
   // ------------------------------------------------------------------------
   
+  fn move_focus(&mut self, action: Action) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let new_focus = match app_focus {
+      AppFocus::Search => {
+        match action {
+          Action::Down => {
+            match self.search.search_type {
+              SearchType::SearchTrack    => AppFocus::SearchTrack,
+              SearchType::SearchAlbum    => AppFocus::SearchAlbum,
+              SearchType::SearchArtist   => AppFocus::SearchArtist,
+              SearchType::SearchPlaylist => AppFocus::SearchPlaylist,
+            }
+          },
+          Action::Left => AppFocus::Queue,
+          _ => app_focus,
+        }
+      },
+
+      AppFocus::SearchTrack | AppFocus::SearchAlbum | AppFocus::SearchArtist | AppFocus::SearchPlaylist => {
+        match action {
+          Action::Up   => AppFocus::Search,
+          Action::Down => AppFocus::Player,
+          Action::Left => AppFocus::Queue,
+          _ => app_focus,
+        }
+      },
+
+      _ => app_focus,
+    };
+
+    self.set_focus(new_focus);
+  }
+
   fn set_focus(&mut self, focus: AppFocus) {
     match self.focus.lock() {
       Ok(mut app_focus) => *app_focus = focus,
@@ -1165,6 +1372,8 @@ impl App {
       AppWindow::Home => self.set_focus(AppFocus::Home),
 
       AppWindow::History => self.set_focus(AppFocus::History),
+
+      AppWindow::Search => self.set_focus(AppFocus::Search),
 
       _ => {},
     };
@@ -1186,13 +1395,7 @@ impl App {
 
       AppBlock::Queue  => self.set_focus(AppFocus::Queue),
 
-      AppBlock::Main   => {
-        match app_window {
-          AppWindow::History => self.set_focus(AppFocus::History),
-
-          _ => self.set_window(AppWindow::Home),
-        };
-      }
+      AppBlock::Main   => self.set_window(app_window),
     };
   }
 
@@ -1230,6 +1433,10 @@ impl App {
 
       Action::Refresh => {
         self.spawn_refresh();
+      }
+
+      Action::Up | Action::Down | Action::Right | Action::Left => {
+        self.move_focus(action);
       }
 
       Action::PauseResume => {
@@ -1340,8 +1547,28 @@ impl App {
         self.spawn_play_history();
       }
 
+      Action::PlaySearch => {
+        self.spawn_play_search();
+      }
+
       Action::QueueHistory => {
         self.spawn_queue_history();
+      }
+
+      Action::Search => {
+        self.spawn_search();
+      }
+
+      Action::SearchInsert { to_insert } => {
+        self.search.buffer.push(to_insert);
+      }
+
+      Action::SearchDelete => {
+        self.search.buffer.pop();
+      }
+
+      Action::SearchUpdated { search } => {
+        self.search = search;
       }
 
       Action::SpotifyStateUpdated { state } => {
@@ -1561,8 +1788,7 @@ impl App {
       return;
     };
 
-    let Some(track) = self.state
-      .queue
+    let Some(track) = self.state.queue
       .as_ref()
       .and_then(|queue| {
         queue.queue.get(index)
@@ -1604,12 +1830,10 @@ impl App {
       return;
     };
 
-    let Some(track) = self.state
-      .history
+    let Some(track) = self.state.history
       .as_ref()
       .and_then(|history| {
-        history
-          .items
+        history.items
           .iter()
           .filter_map(|item| {
             item.track.as_ref()
@@ -1618,6 +1842,44 @@ impl App {
       })
     else {
       return;
+    };
+
+    let uri = track.uri.clone();
+
+    let context_uri = self.get_context_uri()
+      .unwrap_or_default();
+
+    let spotify = self.spotify.clone();
+    let player = self.state.player.clone();
+    let tx = self.action_tx.clone();
+
+    tokio::spawn(async move {
+      if let Err(error) = spotify.play(
+        &player,
+        &uri,
+        &context_uri,
+      ).await
+      {
+        let _ = tx.send(
+          Action::Error(error.to_string()),
+        );
+        return;
+      }
+
+      let _ = tx.send(Action::Refresh);
+    });
+  }
+
+  fn spawn_play_search(&self) {
+    let Some(index) =
+      self.table_state.selected()
+    else {
+      return;
+    };
+
+    let track = match &self.search.tracks.items.get(index) {
+      Some(track) => *track,
+      None => return,
     };
 
     let uri = track.uri.clone();
@@ -1687,6 +1949,28 @@ impl App {
     });
   }
 
+  fn spawn_search(&self) {
+    let spotify = self.spotify.clone();
+    let tx = self.action_tx.clone();
+    let query = self.search.buffer.clone();
+
+    tokio::spawn(async move {
+      match Search::get(&spotify.client, &spotify.access_token, &query).await {
+        Ok(search) => {
+          let _ = tx.send(
+            Action::SearchUpdated { search },
+          );
+        }
+
+        Err(err) => {
+          let _ = tx.send(
+            Action::Error(err.to_string()),
+          );
+        }
+      }
+    });
+  }
+
   // ------------------------------------------------------------------------
   // Helpers
   // ------------------------------------------------------------------------
@@ -1740,8 +2024,8 @@ impl App {
     buf: &mut Buffer,
   ) {
     const TABS: [(AppWindow, &str); 2] = [
-      (AppWindow::Home,   "Home"), 
-      (AppWindow::Search, "Search"),
+      (AppWindow::Home,   "(H)ome"), 
+      (AppWindow::Search, "(S)earch"),
     ];
 
     let app_window = match self.window.lock() {
@@ -1971,8 +2255,447 @@ impl App {
 
       AppWindow::Home    => self.render_home(area, buf),
 
+      AppWindow::Search  => self.render_search(area, buf),
+
       _ => {},
     };
+  }
+
+  fn render_search(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::Search {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let [header_area, main_area] = Layout::vertical([
+      Constraint::Length(3),
+      Constraint::Min(1),
+    ])
+      .spacing(Spacing::Overlap(1))
+      .areas(area);
+
+    let header_block = Block::bordered()
+      .title(
+        Line::from(format!(" Search ").bold())
+        .left_aligned(),
+      )
+      .merge_borders(MergeStrategy::Exact)
+      .border_type(border_type)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
+
+    let input_area = header_block.inner(header_area);
+
+    Paragraph::new(
+      Line::from(format!("{}", self.search.buffer))
+    )
+      .style(Style::default()
+        .bg(Color::Gray)
+        .fg(Color::Black)
+      )
+      .left_aligned()
+      .render(input_area, buf);
+
+    // If focus is the main area, render header border on bottom
+    if app_focus != AppFocus::Search {
+      header_block.clone().render(header_area, buf);
+    }
+
+    match self.search.search_type {
+      SearchType::SearchTrack    => Self::render_search_tracks(self, main_area, buf),
+      SearchType::SearchAlbum    => Self::render_search_albums(self, main_area, buf),
+      SearchType::SearchArtist   => Self::render_search_artists(self, main_area, buf),
+      SearchType::SearchPlaylist => Self::render_search_playlists(self, main_area, buf),
+    }
+    
+    // If focus is the header, render header border on top
+    if app_focus == AppFocus::Search {
+      header_block.clone().render(header_area, buf);
+    }
+
+    let rect = Rect {
+      x: header_area.x,
+      y: header_area.y + header_area.height - 1,
+      width: header_area.width,
+      height: 1,
+    };
+
+    Self::render_search_types(self, rect, buf);
+  }
+
+  fn render_search_types(
+    &mut self,
+    rect: Rect,
+    buf: &mut Buffer,
+  ) {
+    const TABS: [(AppFocus, &str); 4] = [
+      (AppFocus::SearchTrack,    "Track"), 
+      (AppFocus::SearchArtist,   "Artist"),
+      (AppFocus::SearchAlbum,    "Album"),
+      (AppFocus::SearchPlaylist, "Playlist"),
+    ];
+
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let selected = TABS.iter().position(|(focus, _)| *focus == app_focus);
+
+    let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
+      + (TABS.len() as u16 - 1) * 2 + 2;
+
+    let centered = Layout::horizontal([
+      Constraint::Fill(1),
+      Constraint::Length(width),
+      Constraint::Fill(1),
+    ])
+      .split(rect);
+
+    // Creates tabs from every string TABS[i].1
+    let strings: [&_; TABS.len()] = std::array::from_fn(|i| TABS[i].1);
+
+    Tabs::new(strings)
+      .select(selected)
+      .style(
+        Style::default()
+        .fg(Color::Gray)
+      )
+      .highlight_style(
+        Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD),
+      )
+      .divider("")
+      .render(centered[1], buf);
+  }
+
+  fn render_search_tracks(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchTrack {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let header = Row::new([
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+    ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
+      .bold();
+
+    let rows = if !self.search.tracks.items.is_empty() {
+      self.search.tracks.items
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+          Row::new([
+            Cell::from(format!("{:>2}", index + 1)),
+            Cell::from(track.name.as_str()),
+          ])
+        },
+      )
+        .collect::<Vec<_>>()
+    } else {
+      vec![
+        Row::new([
+          Cell::from(""),
+          Cell::from("No tracks"),
+        ])
+      ]
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .merge_borders(MergeStrategy::Exact)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
+
+    let table = Table::new(rows, [
+      Constraint::Length(2),
+      Constraint::Min(10),
+    ])
+      .header(header)
+      .column_spacing(2)
+      .style(
+        Style::default()
+        .fg(Color::White),
+      )
+      .row_highlight_style(
+        Style::default()
+        .bg(Color::Gray),
+      )
+      .block(block);
+
+    StatefulWidget::render(
+      table,
+      area,
+      buf,
+      &mut self.table_state,
+    );
+  }
+
+  fn render_search_albums(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchAlbum {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let header = Row::new([
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+    ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
+      .bold();
+
+    let rows = if !self.search.tracks.items.is_empty() {
+      self.search.tracks.items
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+          Row::new([
+            Cell::from(format!("{:>2}", index + 1)),
+            Cell::from(track.name.as_str()),
+          ])
+        },
+      )
+        .collect::<Vec<_>>()
+    } else {
+      vec![
+        Row::new([
+          Cell::from(""),
+          Cell::from("No tracks"),
+        ])
+      ]
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .merge_borders(MergeStrategy::Exact)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
+
+    let table = Table::new(rows, [
+      Constraint::Length(2),
+      Constraint::Min(10),
+    ])
+      .header(header)
+      .column_spacing(2)
+      .style(
+        Style::default()
+        .fg(Color::White),
+      )
+      .row_highlight_style(
+        Style::default()
+        .bg(Color::Gray),
+      )
+      .block(block);
+
+    StatefulWidget::render(
+      table,
+      area,
+      buf,
+      &mut self.table_state,
+    );
+  }
+
+  fn render_search_artists(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchArtist {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let header = Row::new([
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+    ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
+      .bold();
+
+    let rows = if !self.search.tracks.items.is_empty() {
+      self.search.tracks.items
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+          Row::new([
+            Cell::from(format!("{:>2}", index + 1)),
+            Cell::from(track.name.as_str()),
+          ])
+        },
+      )
+        .collect::<Vec<_>>()
+    } else {
+      vec![
+        Row::new([
+          Cell::from(""),
+          Cell::from("No tracks"),
+        ])
+      ]
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .merge_borders(MergeStrategy::Exact)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
+
+    let table = Table::new(rows, [
+      Constraint::Length(2),
+      Constraint::Min(10),
+    ])
+      .header(header)
+      .column_spacing(2)
+      .style(
+        Style::default()
+        .fg(Color::White),
+      )
+      .row_highlight_style(
+        Style::default()
+        .bg(Color::Gray),
+      )
+      .block(block);
+
+    StatefulWidget::render(
+      table,
+      area,
+      buf,
+      &mut self.table_state,
+    );
+  }
+
+  fn render_search_playlists(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchPlaylist {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let header = Row::new([
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+    ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
+      .bold();
+
+    let rows = if !self.search.tracks.items.is_empty() {
+      self.search.tracks.items
+        .iter()
+        .enumerate()
+        .map(|(index, track)| {
+          Row::new([
+            Cell::from(format!("{:>2}", index + 1)),
+            Cell::from(track.name.as_str()),
+          ])
+        },
+      )
+        .collect::<Vec<_>>()
+    } else {
+      vec![
+        Row::new([
+          Cell::from(""),
+          Cell::from("No tracks"),
+        ])
+      ]
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .merge_borders(MergeStrategy::Exact)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
+
+    let table = Table::new(rows, [
+      Constraint::Length(2),
+      Constraint::Min(10),
+    ])
+      .header(header)
+      .column_spacing(2)
+      .style(
+        Style::default()
+        .fg(Color::White),
+      )
+      .row_highlight_style(
+        Style::default()
+        .bg(Color::Gray),
+      )
+      .block(block);
+
+    StatefulWidget::render(
+      table,
+      area,
+      buf,
+      &mut self.table_state,
+    );
   }
 
   fn render_home(
@@ -1997,6 +2720,17 @@ impl App {
 
     let inner = block.inner(area);
 
+    let [title_area, list_area] = Layout::vertical([
+      Constraint::Length(1),
+      Constraint::Min(1),
+    ])
+      .areas(inner);
+
+    Paragraph::new(Line::from(format!("{}", self.state.user.display_name)))
+      .centered()
+      .wrap(Wrap { trim: true })
+      .render(title_area, buf);
+
     let items = ["History", "History"];
 
     let list = List::new(
@@ -2013,7 +2747,7 @@ impl App {
 
     StatefulWidget::render(
       list,
-      inner,
+      list_area,
       buf,
       &mut self.list1_state,
     );
@@ -2134,27 +2868,40 @@ impl App {
     let instructions = match app_focus {
       AppFocus::Player => {
         Line::from(
-          "Space Pause/Resume | Enter Refresh | h/← Previous | l/→ Next | ↑/↓ Volume | m Mute | s Shuffle | r Repeat",
+          "_ Pause/Resume | ↵ Refresh | h/← Previous | l/→ Next | ↑/↓ Volume | m Mute | s Shuffle | r Repeat",
         )
       }
 
       AppFocus::Queue => {
         Line::from(
-          "Enter Play | ↑/k Up | ↓/j Down | Home/End Jump",
+          "↵ Play | ↑/k Up | ↓/j Down | Home/End Jump | ⌦ Remove",
         )
       }
 
       AppFocus::History => {
         Line::from(
-          "Enter Play | h/← Queue | ↑/k Up | ↓/j Down | Home/End Jump",
+          "↵ Play | h/← Queue | ↑/k Up | ↓/j Down | Home/End Jump",
         )
       }
 
       AppFocus::Home => {
         Line::from(
-          "Enter Play | h/← Queue | ↑/k Up | ↓/j Down | Home/End Jump",
+          "↑/k Up | ↓/j Down | Home/End Jump",
         )
       }
+
+      AppFocus::Search => {
+        Line::from(
+          "↵ Search",
+        )
+      }
+
+      AppFocus::SearchTrack => {
+        Line::from(
+          "↵ Play | ↑/k Up | ↓/j Down | Home/End Jump",
+        )
+      }
+      _ => Line::from(""),
     }
       .blue();
 
@@ -2458,6 +3205,46 @@ fn history_key_action(
   }
 }
 
+fn search_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Enter => {
+      Action::Search
+    }
+
+    KeyCode::Char(to_insert) => {
+      Action::SearchInsert { to_insert }
+    }
+
+    KeyCode::Backspace => {
+      Action::SearchDelete
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn search_track_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Enter => {
+      Action::PlaySearch
+    }
+
+    KeyCode::Down | KeyCode::Char('j') => {
+      Action::TableNext
+    }
+
+    KeyCode::Up | KeyCode::Char('k') => {
+      Action::TablePrevious
+    }
+
+    _ => Action::Render,
+  }
+}
+
 fn key_to_action(
   app_focus: AppFocus,
   app_block: AppBlock,
@@ -2480,6 +3267,30 @@ fn key_to_action(
       return Action::BlockPrevious;
     }
 
+    KeyCode::Char('j') => {
+      if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::Down;
+      }
+    }
+
+    KeyCode::Char('k') => {
+      if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::Up;
+      }
+    }
+
+    KeyCode::Char('h') => {
+      if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::Left;
+      }
+    }
+
+    KeyCode::Char('l') => {
+      if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::Right;
+      }
+    }
+
     _ => {}
   }
 
@@ -2490,7 +3301,7 @@ fn key_to_action(
       }
 
       KeyCode::Char('S') => {
-        return Action::EnterWindow { window: AppWindow::Home };
+        return Action::EnterWindow { window: AppWindow::Search };
       }
 
       _ => {},
@@ -2510,9 +3321,31 @@ fn key_to_action(
       history_key_action(key)
     }
 
+    AppFocus::Search => {
+      search_key_action(key)
+    }
+
+    AppFocus::SearchTrack => {
+      search_track_key_action(key)
+    }
+
+    AppFocus::SearchAlbum => {
+      search_track_key_action(key)
+    }
+
+    AppFocus::SearchPlaylist => {
+      search_track_key_action(key)
+    }
+
+    AppFocus::SearchArtist => {
+      search_track_key_action(key)
+    }
+
     AppFocus::Home => {
       home_key_action(key)
     }
+
+    _ => Action::Render
   }
 }
 
