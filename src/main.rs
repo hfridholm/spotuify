@@ -9,9 +9,12 @@
 use std::{
   env,
   io,
-  sync::{ Arc, Mutex },
+  sync::{
+    Arc,
+    Mutex,
+    atomic::{AtomicU64, Ordering},
+  },
   thread,
-  time::Duration,
   collections::VecDeque,
 };
 
@@ -108,11 +111,14 @@ use tokio::{
     UnboundedSender,
   },
   time,
+  time::{sleep, Duration},
 };
 
 use url::Url;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
+
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 
@@ -1069,6 +1075,8 @@ enum AppWindow {
   Search,
 
   Home,
+  Track,
+  Artist,
   /*
   HomePlaylists,
   HomeFollowing,
@@ -1083,8 +1091,10 @@ impl AppWindow {
   fn get_focus(&self) -> AppFocus {
     match self {
       Self::History => AppFocus::History,
-      Self::Search  => AppFocus::Search,
+      Self::Search  => AppFocus::SearchTrack,
       Self::Home    => AppFocus::Home,
+      Self::Track   => AppFocus::Track,
+      Self::Artist  => AppFocus::Artist,
     }
   }
 }
@@ -1111,6 +1121,8 @@ enum AppFocus {
   SearchPlaylist,
 
   Home,
+  Track,
+  Artist,
   /*
   HomePlaylists,
   HomeFollowing,
@@ -1129,7 +1141,6 @@ enum AppFocus {
 #[derive(Debug, Clone)]
 enum Action {
   Quit,
-  Close,
 
   Tick,
   Render,
@@ -1190,6 +1201,9 @@ enum Action {
     search: Search,
   },
 
+  ShowSearchTrack,
+  ShowSearchArtist,
+
   SpotifyStateUpdated {
     state: SpotifyState,
   },
@@ -1217,24 +1231,29 @@ enum Action {
 
 struct App {
   spotify:       SpotifyApi,
-  state:         SpotifyState,
+  state:         SpotifyState, // Maybe unpack this
 
   focus:         Arc<Mutex<AppFocus>>,
   window:        Arc<Mutex<AppWindow>>,
 
   search: Search,
 
-  queue_state: TableState,
+  track:    Option<Track>,
+  artist:   Option<Artist>,
+  album:    Option<Album>,
+  playlist: Option<Playlist>,
+
+  queue_state: TableState, // Maybe remove this, replace with table_state
   table_state: TableState,
 
-  list1_state: ListState,
-  list2_state: ListState,
+  list1_state: ListState, // Remove this, replace with list_index
+  list2_state: ListState, // Remove this
 
   list_index: usize,
 
   action_tx:     UnboundedSender<Action>,
 
-  error_list:    VecDeque<String>,
+  error_list:    Arc<Mutex<VecDeque<(u64, String)>>>,
   exit:          bool,
 
   // Used to make the progress gauge move smoothly between
@@ -1257,6 +1276,11 @@ impl App {
 
       search: Search::default(),
 
+      track:    None,
+      artist:   None,
+      album:    None,
+      playlist: None,
+
       queue_state: TableState::default(),
       table_state: TableState::default(),
 
@@ -1267,7 +1291,7 @@ impl App {
 
       action_tx,
 
-      error_list: VecDeque::new(),
+      error_list: Arc::new(Mutex::new(VecDeque::new())),
       exit:       false,
 
       last_player_update: std::time::Instant::now(),
@@ -1362,7 +1386,7 @@ impl App {
         }
       },
 
-      AppFocus::Home => {
+      AppFocus::Home | AppFocus::Track | AppFocus::Artist | AppFocus::History => {
         match action {
           Action::Up   => AppFocus::Navbar,
           Action::Down => AppFocus::Player,
@@ -1413,15 +1437,8 @@ impl App {
       Err(_) => return,
     };
 
-    match window {
-      AppWindow::Home => self.set_focus(AppFocus::Home),
-
-      AppWindow::History => self.set_focus(AppFocus::History),
-
-      AppWindow::Search => self.set_focus(AppFocus::Search),
-
-      _ => {},
-    };
+    // Update focus based on window default
+    self.set_focus(window.get_focus());
   }
   
   fn update(&mut self, action: Action) {
@@ -1433,10 +1450,6 @@ impl App {
       Action::Tick => {}
 
       Action::Render => {}
-
-      Action::Close => {
-        self.error_list.pop_front();
-      }
 
       Action::Refresh => {
         self.spawn_refresh();
@@ -1595,6 +1608,33 @@ impl App {
 
       Action::SearchUpdated { search } => {
         self.search = search;
+        self.set_focus(AppFocus::SearchTrack);
+      }
+
+      Action::ShowSearchTrack => {
+        let Some(index) =
+          self.table_state.selected()
+        else {
+          return;
+        };
+
+        if let Some(track) = self.search.tracks.items.get(index) {
+          self.track = Some(track.clone());
+          self.set_window(AppWindow::Track);
+        }
+      }
+
+      Action::ShowSearchArtist => {
+        let Some(index) =
+          self.table_state.selected()
+        else {
+          return;
+        };
+
+        if let Some(artist) = self.search.artists.items.get(index) {
+          self.artist = Some(artist.clone());
+          self.set_window(AppWindow::Artist);
+        }
       }
 
       Action::SpotifyStateUpdated { state } => {
@@ -1606,7 +1646,7 @@ impl App {
       }
 
       Action::Error(error) => {
-        self.error_list.push_back(error);
+        self.spawn_error(error);
       }
 
       Action::SetWindow { window } => {
@@ -1656,6 +1696,20 @@ impl App {
   // ------------------------------------------------------------------------
   // Async Spotify operations
   // ------------------------------------------------------------------------
+
+  fn spawn_error(&self, error: String) {
+    let error_list = Arc::clone(&self.error_list);
+    
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
+    tokio::spawn(async move {
+      error_list.lock().unwrap().push_back((id, error));
+
+      sleep(Duration::from_secs(5)).await;
+
+      error_list.lock().unwrap().retain(|(entry_id, _)| *entry_id != id);
+    });
+  }
 
   fn spawn_refresh(&self) {
     let spotify = self.spotify.clone();
@@ -2205,6 +2259,114 @@ impl App {
 */
   }
 
+  fn render_track(
+    &self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let track = match &self.track {
+      Some(track) => track,
+      None => return,
+    };
+
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::Track {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let block = Block::bordered()
+      .title(
+        Line::from(format!(" {} ", track.name).bold())
+        .left_aligned()
+        .style(Style::default().fg(header_color))
+      )
+      .border_type(border_type)
+      .border_style(
+        Style::default()
+        .fg(block_color)
+      );
+
+    let artists =
+      track
+      .artists
+      .iter()
+      .map(|artist| {
+        artist.name.as_str()
+      })
+    .collect::<Vec<_>>()
+      .join(", ");
+
+    let rows = vec![
+      Row::new([
+        Cell::from("Artists"),
+        Cell::from(":"),
+        Cell::from(format!("{}", artists)),
+      ]),
+      Row::new([
+        Cell::from("Duration"),
+        Cell::from(":"),
+        Cell::from(format!("{}", format_ms(track.duration_ms))),
+      ])
+    ];
+
+    Widget::render(
+      Table::new(rows, [
+        Constraint::Min(10),
+        Constraint::Length(1),
+        Constraint::Min(10),
+      ])
+        .column_spacing(2)
+        .block(block)
+        .style(
+          Style::default()
+          .fg(Color::White),
+        ),
+      area,
+      buf,
+    );
+  }
+
+  fn render_artist(
+    &self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let artist = match &self.artist {
+      Some(artist) => artist,
+      None => return,
+    };
+
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::Artist {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let block = Block::bordered()
+      .title(
+        Line::from(format!(" {} ", artist.name).bold())
+        .left_aligned()
+        .style(Style::default().fg(header_color))
+      )
+      .border_type(border_type)
+      .border_style(
+        Style::default()
+        .fg(block_color)
+      )
+      .render(area, buf);
+  }
+
   fn render_player(
     &self,
     area: Rect,
@@ -2391,11 +2553,10 @@ impl App {
 
     match app_window {
       AppWindow::History => self.render_history(area, buf),
-
       AppWindow::Home    => self.render_home(area, buf),
-
       AppWindow::Search  => self.render_search(area, buf),
-
+      AppWindow::Track   => self.render_track(area, buf),
+      AppWindow::Artist  => self.render_artist(area, buf),
       _ => {},
     };
   }
@@ -3067,9 +3228,15 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
+
+    let error_list = match self.error_list.lock() {
+      Ok(error_list) => error_list,
+      Err(_) => return,
+    };
+
     let mut y = area.y;
 
-    for (index, error) in self.error_list.iter().enumerate() {
+    for (index, (_, error)) in error_list.iter().enumerate() {
       let text_width = error.len() as u16;
 
       // +2 for left/right borders +2 padding
@@ -3404,6 +3571,10 @@ fn search_track_key_action(
       Action::PlaySearch
     }
 
+    KeyCode::Char('i') => {
+      Action::ShowSearchTrack
+    }
+
     KeyCode::Down | KeyCode::Char('j') => {
       Action::TableNext
     }
@@ -3424,6 +3595,10 @@ fn search_artist_key_action(
   key: KeyEvent,
 ) -> Action {
   match key.code {
+    KeyCode::Enter => {
+      Action::ShowSearchArtist
+    }
+
     KeyCode::Down | KeyCode::Char('j') => {
       Action::TableNext
     }
@@ -3493,12 +3668,10 @@ fn key_to_action(
   key: KeyEvent,
 ) -> Action {
   match key.code {
-    KeyCode::Char('q') => {
-      return Action::Quit;
-    }
-
     KeyCode::Char('c') => {
-      return Action::Close;
+      if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return Action::Quit;
+      }
     }
 
     KeyCode::Char('j') => {
