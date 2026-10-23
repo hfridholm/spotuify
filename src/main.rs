@@ -537,9 +537,9 @@ impl PlayedTrack {
 #[derive(Default, Debug, Clone, Deserialize)]
 struct Search {
   tracks:    Tracks,
-  // albums:    Albums,
-  // artists:   Artists,
-  // playlists: Playlists,
+  artists:   Artists,
+  albums:    Albums,
+  playlists: Playlists,
   #[serde(skip)]
   search_type: SearchType,
   #[serde(skip)]
@@ -553,6 +553,17 @@ enum SearchType {
   SearchArtist,
   SearchAlbum,
   SearchPlaylist,
+}
+
+impl SearchType {
+  fn get_focus(&self) -> AppFocus {
+    match self {
+      Self::SearchTrack    => AppFocus::SearchTrack,
+      Self::SearchArtist   => AppFocus::SearchArtist,
+      Self::SearchAlbum    => AppFocus::SearchAlbum,
+      Self::SearchPlaylist => AppFocus::SearchPlaylist,
+    }
+  }
 }
 
 // Spotify: Tracks
@@ -584,6 +595,7 @@ struct Albums {
 struct Playlists {
   limit: u32,
   total: u32,
+  #[serde(skip)]
   items: Vec<Playlist>,
 }
 
@@ -1067,6 +1079,16 @@ enum AppWindow {
   */
 }
 
+impl AppWindow {
+  fn get_focus(&self) -> AppFocus {
+    match self {
+      Self::History => AppFocus::History,
+      Self::Search  => AppFocus::Search,
+      Self::Home    => AppFocus::Home,
+    }
+  }
+}
+
 // ============================================================================
 // AppFocus - the fields the user can interact with
 // ============================================================================
@@ -1077,6 +1099,7 @@ enum AppWindow {
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum AppFocus {
   #[default]
+  Navbar,
   Player,
   Queue,
   History,
@@ -1100,36 +1123,6 @@ enum AppFocus {
 }
 
 // ============================================================================
-// AppBlock
-// ============================================================================
-
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-enum AppBlock {
-  #[default]
-  Player,
-  Queue,
-  Main,
-}
-
-impl AppBlock {
-  fn next(&self) -> Self {
-    match self {
-      Self::Player => Self::Main,
-      Self::Queue  => Self::Player,
-      Self::Main   => Self::Queue,
-    }
-  }
-
-  fn prev(&self) -> Self {
-    match self {
-      Self::Player => Self::Queue,
-      Self::Queue  => Self::Main,
-      Self::Main   => Self::Player,
-    }
-  }
-}
-
-// ============================================================================
 // Actions
 // ============================================================================
 
@@ -1148,8 +1141,12 @@ enum Action {
   Right,
   Left,
 
-  BlockNext,
-  BlockPrevious,
+  NavbarEnter,
+
+  ListNext {
+    max: usize
+  },
+  ListPrev,
 
   PauseResume,
 
@@ -1199,8 +1196,16 @@ enum Action {
 
   HomeEnter,
 
-  EnterWindow {
+  SetWindow {
     window: AppWindow,
+  },
+
+  SetFocus {
+    focus: AppFocus,
+  },
+
+  SetSearchType {
+    search_type: SearchType,
   },
 
   Error(String),
@@ -1215,7 +1220,6 @@ struct App {
   state:         SpotifyState,
 
   focus:         Arc<Mutex<AppFocus>>,
-  block:         Arc<Mutex<AppBlock>>,
   window:        Arc<Mutex<AppWindow>>,
 
   search: Search,
@@ -1225,6 +1229,8 @@ struct App {
 
   list1_state: ListState,
   list2_state: ListState,
+
+  list_index: usize,
 
   action_tx:     UnboundedSender<Action>,
 
@@ -1246,7 +1252,6 @@ impl App {
       spotify,
       state: SpotifyState::default(),
 
-      block:  Arc::new(Mutex::new(AppBlock::Player)),
       focus:  Arc::new(Mutex::new(AppFocus::Player)),
       window: Arc::new(Mutex::new(AppWindow::Home)),
 
@@ -1257,6 +1262,8 @@ impl App {
 
       list1_state: ListState::default(),
       list2_state: ListState::default(),
+
+      list_index: 0,
 
       action_tx,
 
@@ -1324,6 +1331,11 @@ impl App {
       Err(_) => return,
     };
 
+    let app_window = match self.window.lock() {
+      Ok(app_window) => *app_window,
+      Err(_) => return,
+    };
+
     let new_focus = match app_focus {
       AppFocus::Search => {
         match action {
@@ -1336,6 +1348,7 @@ impl App {
             }
           },
           Action::Left => AppFocus::Queue,
+          Action::Up   => AppFocus::Navbar,
           _ => app_focus,
         }
       },
@@ -1348,6 +1361,38 @@ impl App {
           _ => app_focus,
         }
       },
+
+      AppFocus::Home => {
+        match action {
+          Action::Up   => AppFocus::Navbar,
+          Action::Down => AppFocus::Player,
+          Action::Left => AppFocus::Queue,
+          _ => app_focus,
+        }
+      },
+
+      AppFocus::Player => {
+        match action {
+          Action::Up => app_window.get_focus(),
+          _ => app_focus,
+        }
+      }
+
+      AppFocus::Queue => {
+        match action {
+          Action::Down  => AppFocus::Player,
+          Action::Right => app_window.get_focus(),
+          _ => app_focus,
+        }
+      }
+
+      AppFocus::Navbar => {
+        match action {
+          Action::Left => AppFocus::Queue,
+          Action::Down => app_window.get_focus(),
+          _ => app_focus,
+        }
+      }
 
       _ => app_focus,
     };
@@ -1379,26 +1424,6 @@ impl App {
     };
   }
   
-  fn update_focus(&mut self) {
-    let app_window = match self.window.lock() {
-      Ok(app_window) => *app_window,
-      Err(_) => return,
-    };
-
-    let app_block = match self.block.lock() {
-      Ok(app_block) => *app_block,
-      Err(_) => return,
-    };
-
-    match app_block {
-      AppBlock::Player => self.set_focus(AppFocus::Player),
-
-      AppBlock::Queue  => self.set_focus(AppFocus::Queue),
-
-      AppBlock::Main   => self.set_window(app_window),
-    };
-  }
-
   fn update(&mut self, action: Action) {
     match action {
       Action::Quit => {
@@ -1408,24 +1433,6 @@ impl App {
       Action::Tick => {}
 
       Action::Render => {}
-
-      Action::BlockNext => {
-        match self.block.lock() {
-          Ok(mut block) => *block = block.next(),
-          Err(_) => return,
-        };
-
-        self.update_focus();
-      }
-
-      Action::BlockPrevious => {
-        match self.block.lock() {
-          Ok(mut block) => *block = block.prev(),
-          Err(_) => return,
-        };
-        
-        self.update_focus();
-      }
 
       Action::Close => {
         self.error_list.pop_front();
@@ -1437,6 +1444,25 @@ impl App {
 
       Action::Up | Action::Down | Action::Right | Action::Left => {
         self.move_focus(action);
+      }
+
+      Action::NavbarEnter => {
+        const TABS: [(AppWindow, &str); 2] = [
+          (AppWindow::Home,   "Home"),
+          (AppWindow::Search, "Search"),
+        ];
+
+        if let Some((window, _)) = TABS.get(self.list_index) {
+          self.set_window(*window);
+        }
+      }
+
+      Action::ListNext { max } => {
+        self.list_index = self.list_index.saturating_add(1).min(max.saturating_sub(1));
+      }
+
+      Action::ListPrev => {
+        self.list_index = self.list_index.saturating_sub(1);
       }
 
       Action::PauseResume => {
@@ -1583,8 +1609,19 @@ impl App {
         self.error_list.push_back(error);
       }
 
-      Action::EnterWindow { window } => {
+      Action::SetWindow { window } => {
         self.set_window(window);
+      }
+
+      Action::SetFocus { focus } => {
+        self.set_focus(focus);
+      }
+
+      Action::SetSearchType { search_type } => {
+        let focus = search_type.get_focus();
+
+        self.set_focus(focus);
+        self.search.search_type = search_type;
       }
     }
   }
@@ -2023,9 +2060,105 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
+    let app_focus = match self.focus.lock() {
+      Ok(focus) => *focus,
+      Err(_) => return,
+    };
+
+    let (color, border_type) = if app_focus == AppFocus::Navbar {
+      (Color::Green, BorderType::Thick)
+    } else {
+      (Color::White, BorderType::Plain)
+    };
+
     const TABS: [(AppWindow, &str); 2] = [
-      (AppWindow::Home,   "(H)ome"), 
-      (AppWindow::Search, "(S)earch"),
+      (AppWindow::Home,   "Home"),
+      (AppWindow::Search, "Search"),
+    ];
+
+    let app_window = match self.window.lock() {
+      Ok(window) => *window,
+      Err(_) => AppWindow::Home,
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .border_style(Style::default().fg(color));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+
+    // Calculate the width needed for all tabs.
+    let width = TABS
+      .iter()
+      .map(|(_, name)| name.len() as u16)
+      .sum::<u16>()
+      + (TABS.len() as u16 - 1) * 3;
+
+    let centered = Layout::horizontal([
+      Constraint::Fill(1),
+      Constraint::Length(width),
+      Constraint::Fill(1),
+    ])
+      .split(inner);
+
+    let mut x = centered[1].x;
+
+    for (i, (window, name)) in TABS.iter().enumerate() {
+      // List selected item is only visable if navbar is in focus
+      let is_list_selected = i == self.list_index && app_focus == AppFocus::Navbar;
+      let is_current_window = *window == app_window;
+
+      let style = match (is_list_selected, is_current_window) {
+        // Both states are active.
+        (true, true) => Style::default()
+          .fg(Color::White)
+          .bg(Color::Blue)
+          .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+
+        // Selected list item.
+        (true, false) => Style::default()
+          .fg(Color::White)
+          .bg(Color::Blue),
+
+        // Current application window.
+        (false, true) => Style::default()
+          .fg(Color::Cyan)
+          .add_modifier(Modifier::BOLD),
+
+        // Neither state is active.
+        (false, false) => Style::default()
+          .fg(Color::Gray),
+      };
+
+      let tab_area = Rect {
+        x,
+        y: centered[1].y,
+        width: name.len() as u16,
+        height: centered[1].height,
+      };
+
+      Paragraph::new(*name)
+        .style(style)
+        .render(tab_area, buf);
+
+      x += name.len() as u16 + 3;
+    }
+/*
+    let app_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus,
+      Err(_) => return,
+    };
+
+    let (color, border_type) = if app_focus == AppFocus::Player {
+      (Color::Green, BorderType::Thick)
+    } else {
+      (Color::White, BorderType::Plain)
+    };
+
+    const TABS: [(AppWindow, &str); 2] = [
+      (AppWindow::Home,   "Home"), 
+      (AppWindow::Search, "Search"),
     ];
 
     let app_window = match self.window.lock() {
@@ -2038,7 +2171,12 @@ impl App {
     let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
       + (TABS.len() as u16 - 1) * 3 + 1;
 
-    let block = Block::bordered();
+    let block = Block::bordered()
+      .border_type(border_type)
+      .border_style(
+        Style::default()
+        .fg(color),
+      )
 
     block.clone().render(area, buf);
 
@@ -2064,6 +2202,7 @@ impl App {
         .add_modifier(Modifier::BOLD),
       )
       .render(centered[1], buf);
+*/
   }
 
   fn render_player(
@@ -2315,8 +2454,8 @@ impl App {
 
     match self.search.search_type {
       SearchType::SearchTrack    => Self::render_search_tracks(self, main_area, buf),
-      SearchType::SearchAlbum    => Self::render_search_albums(self, main_area, buf),
       SearchType::SearchArtist   => Self::render_search_artists(self, main_area, buf),
+      SearchType::SearchAlbum    => Self::render_search_albums(self, main_area, buf),
       SearchType::SearchPlaylist => Self::render_search_playlists(self, main_area, buf),
     }
     
@@ -2400,7 +2539,8 @@ impl App {
 
     let header = Row::new([
       Cell::from(" #"),
-      Cell::from("TRACK"),
+      Cell::from("NAME"),
+      Cell::from("ARTISTS"),
     ])
       .style(
         Style::default()
@@ -2416,6 +2556,12 @@ impl App {
           Row::new([
             Cell::from(format!("{:>2}", index + 1)),
             Cell::from(track.name.as_str()),
+            Cell::from(track.artists
+              .iter()
+              .map(|artist| artist.name.as_str())
+              .collect::<Vec<_>>()
+              .join(", ")
+            )
           ])
         },
       )
@@ -2425,6 +2571,7 @@ impl App {
         Row::new([
           Cell::from(""),
           Cell::from("No tracks"),
+          Cell::from(""),
         ])
       ]
     };
@@ -2440,16 +2587,18 @@ impl App {
     let table = Table::new(rows, [
       Constraint::Length(2),
       Constraint::Min(10),
+      Constraint::Fill(1),
     ])
       .header(header)
       .column_spacing(2)
       .style(
         Style::default()
-        .fg(Color::White),
+        .fg(Color::White)
       )
       .row_highlight_style(
         Style::default()
-        .bg(Color::Gray),
+        .bg(Color::Gray)
+        .fg(Color::Black)
       )
       .block(block);
 
@@ -2479,7 +2628,7 @@ impl App {
 
     let header = Row::new([
       Cell::from(" #"),
-      Cell::from("TRACK"),
+      Cell::from("NAME"),
     ])
       .style(
         Style::default()
@@ -2487,14 +2636,14 @@ impl App {
       )
       .bold();
 
-    let rows = if !self.search.tracks.items.is_empty() {
-      self.search.tracks.items
+    let rows = if !self.search.albums.items.is_empty() {
+      self.search.albums.items
         .iter()
         .enumerate()
-        .map(|(index, track)| {
+        .map(|(index, album)| {
           Row::new([
             Cell::from(format!("{:>2}", index + 1)),
-            Cell::from(track.name.as_str()),
+            Cell::from(album.name.as_str()),
           ])
         },
       )
@@ -2503,7 +2652,7 @@ impl App {
       vec![
         Row::new([
           Cell::from(""),
-          Cell::from("No tracks"),
+          Cell::from("No albums"),
         ])
       ]
     };
@@ -2558,7 +2707,7 @@ impl App {
 
     let header = Row::new([
       Cell::from(" #"),
-      Cell::from("TRACK"),
+      Cell::from("NAME"),
     ])
       .style(
         Style::default()
@@ -2566,14 +2715,14 @@ impl App {
       )
       .bold();
 
-    let rows = if !self.search.tracks.items.is_empty() {
-      self.search.tracks.items
+    let rows = if !self.search.artists.items.is_empty() {
+      self.search.artists.items
         .iter()
         .enumerate()
-        .map(|(index, track)| {
+        .map(|(index, artist)| {
           Row::new([
             Cell::from(format!("{:>2}", index + 1)),
-            Cell::from(track.name.as_str()),
+            Cell::from(artist.name.as_str()),
           ])
         },
       )
@@ -2582,7 +2731,7 @@ impl App {
       vec![
         Row::new([
           Cell::from(""),
-          Cell::from("No tracks"),
+          Cell::from("No artists"),
         ])
       ]
     };
@@ -2637,7 +2786,7 @@ impl App {
 
     let header = Row::new([
       Cell::from(" #"),
-      Cell::from("TRACK"),
+      Cell::from("NAME"),
     ])
       .style(
         Style::default()
@@ -2645,14 +2794,14 @@ impl App {
       )
       .bold();
 
-    let rows = if !self.search.tracks.items.is_empty() {
-      self.search.tracks.items
+    let rows = if !self.search.playlists.items.is_empty() {
+      self.search.playlists.items
         .iter()
         .enumerate()
-        .map(|(index, track)| {
+        .map(|(index, playlist)| {
           Row::new([
             Cell::from(format!("{:>2}", index + 1)),
-            Cell::from(track.name.as_str()),
+            Cell::from(playlist.name.as_str()),
           ])
         },
       )
@@ -2661,7 +2810,7 @@ impl App {
       vec![
         Row::new([
           Cell::from(""),
-          Cell::from("No tracks"),
+          Cell::from("No playlists"),
         ])
       ]
     };
@@ -2738,10 +2887,12 @@ impl App {
       .map(|item| ListItem::new(*item))
       .collect::<Vec<_>>(),
     )
-      .highlight_style(
-        Style::default()
-        .bg(Color::Blue)
-        .fg(Color::White),
+      .style(Style::default()
+        .fg(Color::White)
+      )
+      .highlight_style(Style::default()
+        .bg(Color::Gray)
+        .fg(Color::Black)
       )
       .highlight_symbol(">> ");
 
@@ -3077,6 +3228,26 @@ impl Widget for &mut App {
 // Keyboard handling
 // ============================================================================
 
+fn navbar_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Enter => {
+      Action::NavbarEnter
+    }
+
+    KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+      Action::ListNext { max: 2 }
+    }
+
+    KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+      Action::ListPrev
+    }
+
+    _ => Action::Render,
+  }
+}
+
 fn player_key_action(
   key: KeyEvent,
 ) -> Action {
@@ -3241,13 +3412,84 @@ fn search_track_key_action(
       Action::TablePrevious
     }
 
+    KeyCode::Tab => {
+      Action::SetSearchType { search_type: SearchType::SearchArtist }
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn search_artist_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Down | KeyCode::Char('j') => {
+      Action::TableNext
+    }
+
+    KeyCode::Up | KeyCode::Char('k') => {
+      Action::TablePrevious
+    }
+
+    KeyCode::Tab => {
+      Action::SetSearchType { search_type: SearchType::SearchAlbum }
+    }
+
+    KeyCode::BackTab => {
+      Action::SetSearchType { search_type: SearchType::SearchTrack }
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn search_album_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Down | KeyCode::Char('j') => {
+      Action::TableNext
+    }
+
+    KeyCode::Up | KeyCode::Char('k') => {
+      Action::TablePrevious
+    }
+
+    KeyCode::Tab => {
+      Action::SetSearchType { search_type: SearchType::SearchPlaylist }
+    }
+
+    KeyCode::BackTab => {
+      Action::SetSearchType { search_type: SearchType::SearchArtist }
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn search_playlist_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Down | KeyCode::Char('j') => {
+      Action::TableNext
+    }
+
+    KeyCode::Up | KeyCode::Char('k') => {
+      Action::TablePrevious
+    }
+
+    KeyCode::BackTab => {
+      Action::SetSearchType { search_type: SearchType::SearchAlbum }
+    }
+
     _ => Action::Render,
   }
 }
 
 fn key_to_action(
   app_focus: AppFocus,
-  app_block: AppBlock,
   key: KeyEvent,
 ) -> Action {
   match key.code {
@@ -3257,14 +3499,6 @@ fn key_to_action(
 
     KeyCode::Char('c') => {
       return Action::Close;
-    }
-
-    KeyCode::Tab => {
-      return Action::BlockNext;
-    }
-
-    KeyCode::BackTab => {
-      return Action::BlockPrevious;
     }
 
     KeyCode::Char('j') => {
@@ -3294,21 +3528,11 @@ fn key_to_action(
     _ => {}
   }
 
-  if app_block == AppBlock::Main {
-    match key.code {
-      KeyCode::Char('H') => {
-        return Action::EnterWindow { window: AppWindow::Home };
-      }
-
-      KeyCode::Char('S') => {
-        return Action::EnterWindow { window: AppWindow::Search };
-      }
-
-      _ => {},
-    }
-  }
-
   match app_focus {
+    AppFocus::Navbar => {
+      navbar_key_action(key)
+    }
+
     AppFocus::Player => {
       player_key_action(key)
     }
@@ -3330,15 +3554,15 @@ fn key_to_action(
     }
 
     AppFocus::SearchAlbum => {
-      search_track_key_action(key)
+      search_album_key_action(key)
     }
 
     AppFocus::SearchPlaylist => {
-      search_track_key_action(key)
+      search_playlist_key_action(key)
     }
 
     AppFocus::SearchArtist => {
-      search_track_key_action(key)
+      search_artist_key_action(key)
     }
 
     AppFocus::Home => {
@@ -3357,7 +3581,6 @@ fn spawn_event_handler(
   tx: UnboundedSender<Action>,
   app_focus:  Arc<Mutex<AppFocus>>,
   app_window: Arc<Mutex<AppWindow>>,
-  app_block:  Arc<Mutex<AppBlock>>,
 ) {
   tokio::spawn(async move {
     loop {
@@ -3400,12 +3623,7 @@ fn spawn_event_handler(
         Err(_) => return,
       };
 
-      let app_block = match app_block.lock() {
-        Ok(app_block) => *app_block,
-        Err(_) => return,
-      };
-
-      let action = key_to_action(app_focus, app_block, key);
+      let action = key_to_action(app_focus, key);
 
       if tx.send(action).is_err() {
         return;
@@ -3431,7 +3649,6 @@ async fn main() -> Result<(), Error> {
     action_tx.clone(),
     app.focus.clone(),
     app.window.clone(),
-    app.block.clone(),
   );
 
   let mut terminal = ratatui::init();
