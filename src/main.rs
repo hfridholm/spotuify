@@ -7,14 +7,11 @@
  */
 
 use std::{
-  env,
-  io,
   sync::{
     Arc,
     Mutex,
     atomic::{AtomicU64, Ordering},
   },
-  thread,
   collections::VecDeque,
 };
 
@@ -75,8 +72,6 @@ use ratatui::{
   Frame,
 };
 
-use serde::Deserialize;
-
 use tokio::{
   sync::mpsc::{
     self,
@@ -108,6 +103,10 @@ use crate::api::{
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+// ============================================================================
+// SearchType
+// ============================================================================
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum SearchType {
@@ -229,9 +228,7 @@ enum Action {
 
   NavbarEnter,
 
-  ListNext {
-    max: usize
-  },
+  ListNext { max: usize },
   ListPrev,
 
   PauseResume,
@@ -268,44 +265,25 @@ enum Action {
   QueueHistory,
 
   Search,
-  SearchInsert {
-    to_insert: char,
-  },
+  SearchInsert { to_insert: char },
   SearchDelete,
   ShowSearchTrack,
   ShowSearchArtist,
 
+  SearchUpdated  { search:  Search  },
+  PlayerUpdated  { player:  Player  },
+  QueueUpdated   { queue:   Queue   },
   /*
-  SpotifyStateUpdated {
-    state: SpotifyState,
-  },
-  PlayerUpdated {
-    player: Player,
-  },
-  HistoryUpdated {
-    history: History,
-  },
-  QueueUpdated {
-    queue: Queue,
-  },
+  HistoryUpdated { history: History },
+  UserUpdated    { user:    User    },
   */
-  SearchUpdated {
-    search: Search,
-  },
 
   HomeEnter,
 
-  SetWindow {
-    window: AppWindow,
-  },
+  SetWindow { window: AppWindow },
+  SetFocus  { focus:  AppFocus  },
 
-  SetFocus {
-    focus: AppFocus,
-  },
-
-  SetSearchType {
-    search_type: SearchType,
-  },
+  SetSearchType { search_type: SearchType },
 
   Error(String),
 }
@@ -437,7 +415,7 @@ impl App {
         }
 
         _ = refresh_interval.tick() => {
-          // self.action_tx.send(Action::Refresh)?;
+          self.action_tx.send(Action::Refresh)?;
         }
       }
     }
@@ -552,7 +530,7 @@ impl App {
       Action::Render => {}
 
       Action::Refresh => {
-        // self.spawn_refresh();
+        self.spawn_refresh();
       }
 
       Action::Up | Action::Down | Action::Right | Action::Left => {
@@ -711,6 +689,26 @@ impl App {
         self.set_focus(AppFocus::SearchTrack);
       }
 
+      Action::PlayerUpdated { player } => {
+        self.player = player;
+        self.last_player_update = std::time::Instant::now();
+      }
+
+      Action::QueueUpdated { queue } => {
+        self.queue = Some(queue);
+
+        if let Some(queue) = &self.queue {
+          if queue.queue.is_empty() {
+            self.queue_state.select(None);
+          }
+          else if let Some(index) = self.queue_state.selected() {
+            if index >= queue.queue.len() {
+              self.queue_state.select(Some(queue.queue.len() - 1));
+            }
+          }
+        }
+      }
+
       Action::ShowSearchTrack => {
         let Some(index) =
           self.table_state.selected()
@@ -736,16 +734,6 @@ impl App {
           self.set_window(AppWindow::Artist);
         }
       }
-
-      /*
-      Action::SpotifyStateUpdated { state } => {
-        self.state = state;
-
-        self.last_player_update = std::time::Instant::now();
-
-        self.clamp_selection();
-      }
-      */
 
       Action::Error(error) => {
         self.spawn_error(error);
@@ -813,28 +801,46 @@ impl App {
     });
   }
 
-  /*
   fn spawn_refresh(&self) {
     let spotify = self.spotify.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
-      match spotify.refresh().await {
-        Ok(state) => {
+      match spotify.get_player().await {
+        Ok(player) => {
           let _ = tx.send(
-            Action::SpotifyStateUpdated { state },
+            Action::PlayerUpdated { player },
           );
         }
 
-        Err(error) => {
+        Err(err) => {
           let _ = tx.send(
-            Action::Error(format!("Refresh failed: {error}")),
+            Action::Error(err.to_string()),
+          );
+        }
+      }
+    });
+
+    // Clone again
+    let spotify = self.spotify.clone();
+    let tx = self.action_tx.clone();
+
+    tokio::spawn(async move {
+      match spotify.get_queue().await {
+        Ok(queue) => {
+          let _ = tx.send(
+            Action::QueueUpdated { queue },
+          );
+        }
+
+        Err(err) => {
+          let _ = tx.send(
+            Action::Error(err.to_string()),
           );
         }
       }
     });
   }
-  */
 
   fn spawn_pause(&self) {
     let spotify = self.spotify.clone();
@@ -992,7 +998,8 @@ impl App {
       return;
     };
 
-    let uri = track.uri.clone();
+    let track_uri = track.uri.clone();
+    let album_uri = track.album.uri.clone();
 
     let context_uri = self.get_context_uri()
       .unwrap_or_default();
@@ -1004,8 +1011,8 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.play(
         &player,
-        &uri,
-        &context_uri,
+        &track_uri,
+        &album_uri,
       ).await
       {
         let _ = tx.send(
@@ -1039,7 +1046,8 @@ impl App {
       return;
     };
 
-    let uri = track.uri.clone();
+    let track_uri = track.uri.clone();
+    let album_uri = track.album.uri.clone();
 
     let context_uri = self.get_context_uri()
       .unwrap_or_default();
@@ -1051,8 +1059,8 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.play(
         &player,
-        &uri,
-        &context_uri,
+        &track_uri,
+        &album_uri,
       ).await
       {
         let _ = tx.send(
@@ -1077,7 +1085,8 @@ impl App {
       None => return,
     };
 
-    let uri = track.uri.clone();
+    let track_uri = track.uri.clone();
+    let album_uri = track.album.uri.clone();
 
     let context_uri = self.get_context_uri()
       .unwrap_or_default();
@@ -1086,11 +1095,16 @@ impl App {
     let player = self.player.clone();
     let tx = self.action_tx.clone();
 
+    // Create Action::Message
+    let _ = tx.send(
+      Action::Error(format!("Playing: {}\nTrack Uri: {}\nAlbum Uri: {}", track.name.to_string(), track.uri.to_string(), track.album.name.to_string()))
+    );
+
     tokio::spawn(async move {
       if let Err(error) = spotify.play(
         &player,
-        &uri,
-        &context_uri,
+        &track_uri,
+        &album_uri,
       ).await
       {
         let _ = tx.send(
@@ -1125,14 +1139,14 @@ impl App {
       return;
     };
 
-    let uri = track.uri.clone();
+    let track_uri = track.uri.clone();
 
     let spotify = self.spotify.clone();
     let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
-      if let Err(error) = spotify.queue(&player, &uri).await {
+      if let Err(error) = spotify.queue(&player, &track_uri).await {
         let _ = tx.send(
           Action::Error(error.to_string()),
         );
@@ -1185,19 +1199,6 @@ impl App {
       .ok_or_else(|| {
         "No track context".into()
       })
-  }
-
-  fn clamp_selection(&mut self) {
-    if let Some(queue) = &self.queue {
-      if queue.queue.is_empty() {
-        self.queue_state.select(None);
-      }
-      else if let Some(index) = self.queue_state.selected() {
-        if index >= queue.queue.len() {
-          self.queue_state.select(Some(queue.queue.len() - 1));
-        }
-      }
-    }
   }
 
   // ------------------------------------------------------------------------

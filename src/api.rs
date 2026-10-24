@@ -61,10 +61,6 @@ const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 #[derive(Debug, Deserialize)]
 struct SpotifyToken {
   access_token:  String,
-  #[allow(dead_code)]
-  scope:         String,
-  #[allow(dead_code)]
-  expires_in:    u64,
   refresh_token: Option<String>,
 }
 
@@ -270,6 +266,10 @@ impl SpotifyApi {
 
   pub async fn get_player(&self) -> Result<Player, Error> {
     Player::get(&self).await
+  }
+
+  pub async fn get_queue(&self) -> Result<Queue, Error> {
+    Queue::get(&self).await
   }
 
   pub async fn get_history(&self) -> Result<History, Error> {
@@ -487,6 +487,7 @@ pub struct Context {
 // Spotify: TrackObject
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct Track {
+  pub album:       Album,
   pub id:          String,
   pub name:        String,
   pub uri:         String,
@@ -508,6 +509,7 @@ pub struct Album {
   pub total_tracks: u32,
   pub release_date: String,
   pub id:           String,
+  pub uri:          String,
   pub name:         String,
   pub artists:      Vec<Artist>,
 }
@@ -741,9 +743,7 @@ impl Player {
     };
 
     client
-      .put(
-        "https://api.spotify.com/v1/me/player/play",
-      )
+      .put("https://api.spotify.com/v1/me/player/play")
       .query(&[
         ("device_id", &device.id.as_str()),
       ])
