@@ -189,6 +189,7 @@ enum Action {
   Tick,
   Render,
 
+  Initialize,
   Refresh,
 
   Up,
@@ -197,6 +198,7 @@ enum Action {
   Left,
 
   NavbarEnter,
+  EnterHome,
 
   ListNext { max: usize },
   ListPrev,
@@ -240,6 +242,7 @@ enum Action {
 
   AlbumTracksUpdated { tracks: SimplifiedTracks },
 
+  ApiUpdated     { api: SpotifyApi  },
   SearchUpdated  { search:  Search  },
   PlayerUpdated  { player:  Player  },
   QueueUpdated   { queue:   Queue   },
@@ -304,27 +307,20 @@ impl App {
   async fn new(
     action_tx: UnboundedSender<Action>,
   ) -> Result<Self, Error> {
-    // Maybe rename this to "api"
-    let spotify = SpotifyApi::new().await?;
-
-    let user           = User::get(&spotify).await?;
-    let user_playlists = Playlists::get_current_users(&spotify).await?;
-
-    let player = Player::get(&spotify).await?;
-    let queue  = Queue::get(&spotify).await?;
-
     Ok(Self {
-      spotify,
+      spotify: SpotifyApi::default(), // Maybe rename this to "api"
 
       focus:  Arc::new(Mutex::new(AppFocus::Player)),
       window: Arc::new(Mutex::new(AppWindow::Home)),
 
-      user,
-      user_playlists,
+      user:           User::default(),
+      user_playlists: Playlists::default(),
 
-      player,
-      history: None, // Some(history),
-      queue:   Some(queue),
+      player:  Player::default(),
+      last_player_update: std::time::Instant::now(),
+
+      history: None,
+      queue:   None,
 
       search:        Search::default(),
       search_buffer: String::default(),
@@ -346,9 +342,8 @@ impl App {
 
       error_list:   Arc::new(Mutex::new(VecDeque::new())),
       message_list: Arc::new(Mutex::new(VecDeque::new())),
-      exit:       false,
 
-      last_player_update: std::time::Instant::now(),
+      exit: false,
     })
   }
 
@@ -357,8 +352,8 @@ impl App {
     terminal: &mut DefaultTerminal,
     mut action_rx: UnboundedReceiver<Action>,
   ) -> Result<(), Error> {
-    // Immediately fetch Spotify state.
-    self.action_tx.send(Action::Refresh)?;
+    // Immediately fetch Spotify state
+    self.action_tx.send(Action::Initialize)?;
 
     // Render playing track progress bar every 33 ms
     let mut render_interval = time::interval(
@@ -511,10 +506,20 @@ impl App {
   }
   
   fn set_window(&mut self, window: AppWindow) {
+    let tx = self.action_tx.clone();
+
     match self.window.lock() {
       Ok(mut app_window) => *app_window = window,
       Err(_) => return,
     };
+
+    // Let the window initialize itself
+    match window {
+      AppWindow::Home => {
+        let _ = tx.send(Action::EnterHome);
+      }
+      _ => {}
+    }
 
     // Update focus based on window default
     self.set_focus(window.get_focus());
@@ -535,8 +540,16 @@ impl App {
         self.spawn_refresh();
       }
 
+      Action::Initialize => {
+        self.spawn_initialize();
+      }
+
       Action::Up | Action::Down | Action::Right | Action::Left => {
         self.move_focus(action);
+      }
+
+      Action::EnterHome => {
+        self.spawn_fetch_user();
       }
 
       Action::NavbarEnter => {
@@ -670,6 +683,10 @@ impl App {
         self.user = user;
       }
 
+      Action::ApiUpdated { api } => {
+        self.spotify = api;
+      }
+
       Action::QueueUpdated { queue } => {
         self.queue = Some(queue);
 
@@ -786,6 +803,27 @@ impl App {
   // Async Spotify operations
   // ------------------------------------------------------------------------
 
+  fn spawn_fetch_user(&self) {
+    let spotify = self.spotify.clone();
+    let tx = self.action_tx.clone();
+
+    tokio::spawn(async move {
+      match spotify.get_user().await {
+        Ok(user) => {
+          let _ = tx.send(
+            Action::UserUpdated { user }
+          );
+        }
+        Err(err) => {
+          let _ = tx.send(
+            Action::Error(err.to_string())
+          );
+          return;
+        }
+      }
+    });
+  }
+
   fn spawn_show_search_album(&mut self) {
     let Some(index) =
       self.table_state.selected()
@@ -846,64 +884,123 @@ impl App {
     });
   }
 
+  fn spawn_initialize(&self) {
+    let spotify = self.spotify.clone();
+    let tx = self.action_tx.clone();
+
+    tokio::spawn(async move {
+      // 1. Initialize the API if needed.
+      let spotify = if spotify.access_token.is_empty() {
+        match SpotifyApi::new().await {
+          Ok(api) => {
+            let _ = tx.send(Action::ApiUpdated {
+              api: api.clone(),
+            });
+
+            api
+          }
+          Err(err) => {
+            let _ = tx.send(Action::Error(err.to_string()));
+            return;
+          }
+        }
+      } else {
+        spotify
+      };
+
+      // 2. Fetch player, queue and user concurrently.
+      let tx_player = tx.clone();
+      let tx_queue = tx.clone();
+      let tx_user = tx.clone();
+
+      let player_task = async {
+        match spotify.get_player().await {
+          Ok(player) => {
+            let _ = tx_player.send(Action::PlayerUpdated { player });
+          }
+          Err(err) => {
+            let _ = tx_player.send(Action::Error(err.to_string()));
+          }
+        }
+      };
+
+      let queue_task = async {
+        match spotify.get_queue().await {
+          Ok(queue) => {
+            let _ = tx_queue.send(Action::QueueUpdated { queue });
+          }
+          Err(err) => {
+            let _ = tx_queue.send(Action::Error(err.to_string()));
+          }
+        }
+      };
+
+      let user_task = async {
+        match spotify.get_user().await {
+          Ok(user) => {
+            let _ = tx_user.send(Action::UserUpdated { user });
+          }
+          Err(err) => {
+            let _ = tx_user.send(Action::Error(err.to_string()));
+          }
+        }
+      };
+
+      tokio::join!(player_task, queue_task, user_task);
+    });
+  }
+
   fn spawn_refresh(&self) {
     let spotify = self.spotify.clone();
-    let tx      = self.action_tx.clone();
+    let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
-      match spotify.get_player().await {
-        Ok(player) => {
-          let _ = tx.send(
-            Action::PlayerUpdated { player },
-          );
+      // 1. Initialize the API if needed.
+      let spotify = if spotify.access_token.is_empty() {
+        match SpotifyApi::new().await {
+          Ok(api) => {
+            let _ = tx.send(Action::ApiUpdated {
+              api: api.clone(),
+            });
+
+            api
+          }
+          Err(err) => {
+            let _ = tx.send(Action::Error(err.to_string()));
+            return;
+          }
         }
+      } else {
+        spotify
+      };
 
-        Err(err) => {
-          let _ = tx.send(
-            Action::Error(err.to_string()),
-          );
+      // 2. Fetch player and queue concurrently.
+      let tx_player = tx.clone();
+      let tx_queue = tx.clone();
+
+      let player_task = async {
+        match spotify.get_player().await {
+          Ok(player) => {
+            let _ = tx_player.send(Action::PlayerUpdated { player });
+          }
+          Err(err) => {
+            let _ = tx_player.send(Action::Error(err.to_string()));
+          }
         }
-      }
-    });
+      };
 
-    // Clone again
-    let spotify = self.spotify.clone();
-    let tx      = self.action_tx.clone();
-
-    tokio::spawn(async move {
-      match spotify.get_queue().await {
-        Ok(queue) => {
-          let _ = tx.send(
-            Action::QueueUpdated { queue },
-          );
+      let queue_task = async {
+        match spotify.get_queue().await {
+          Ok(queue) => {
+            let _ = tx_queue.send(Action::QueueUpdated { queue });
+          }
+          Err(err) => {
+            let _ = tx_queue.send(Action::Error(err.to_string()));
+          }
         }
+      };
 
-        Err(err) => {
-          let _ = tx.send(
-            Action::Error(err.to_string()),
-          );
-        }
-      }
-    });
-
-    // Clone again
-    let spotify = self.spotify.clone();
-    let tx      = self.action_tx.clone();
-
-    tokio::spawn(async move {
-      match spotify.get_user().await {
-        Ok(user) => {
-          let _ = tx.send(
-            Action::UserUpdated { user },
-          );
-        }
-
-        Err(err) => {
-          let _ = tx.send(
-            Action::Error(err.to_string()),
-          );
-        }
-      }
+      tokio::join!(player_task, queue_task);
     });
   }
 

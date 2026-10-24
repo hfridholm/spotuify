@@ -240,10 +240,10 @@ fn get_access_token_blocking(
 // Spotify data types
 // ============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct SpotifyApi {
-  client:       Client,
-  access_token: Arc<str>,
+  pub client:       Client,
+  pub access_token: Arc<str>,
 }
 
 impl SpotifyApi {
