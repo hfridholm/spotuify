@@ -1,21 +1,18 @@
-/*              _ 
- *   __ _ _ __ (_)
- *  / _` | '_ \| |
- * | (_| | |_) | |
- *  \__,_| .__/|_|
- *       |_|      
+/*     _          _ 
+ *    / \   _ __ (_)
+ *   / _ \ | '_ \| |
+ *  / ___ \| |_) | |
+ * /_/   \_\ .__/|_|
+ *         |_|
  */
+
+use crate::error::Error;
 
 use std::{
   env,
-  io,
   sync::{
     Arc,
-    Mutex,
-    atomic::{AtomicU64, Ordering},
   },
-  thread,
-  collections::VecDeque,
 };
 
 use url::Url;
@@ -48,8 +45,6 @@ use tiny_http::{
   Response,
   Server,
 };
-
-type Error = Box<dyn std::error::Error + Send + Sync>;
 
 
 // ============================================================================
