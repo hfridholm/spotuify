@@ -56,6 +56,14 @@ pub(crate) fn key_to_action(
       }
     }
 
+    KeyCode::F(1) => {
+      return Action::SetFocus { focus: AppFocus::Search };
+    }
+
+    KeyCode::F(2) => {
+      return Action::SetFocus { focus: AppFocus::HomePlaylists };
+    }
+
     _ => {}
   }
 

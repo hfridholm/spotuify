@@ -78,8 +78,7 @@ impl App {
       let lines = text_width.div_ceil(content_width);
 
       // +3 for top/bottom borders + "Error"
-      let height_add = if is_error { 3 } else { 2 };
-      let height = (lines + height_add).min(area.height.saturating_sub(y - area.y));
+      let height = (lines + 3).min(area.height.saturating_sub(y - area.y));
 
       let rect = Rect {
         x: area.x + area.width - width,
@@ -103,7 +102,7 @@ impl App {
         .border_type(BorderType::Plain)
         .border_style(
           Style::default()
-          .fg(Color::White)
+          .fg(Color::Green)
         )
       };
 
@@ -114,6 +113,7 @@ impl App {
         ]))
       } else {
         Paragraph::new(Text::from(vec![
+          Line::from("Info".to_string().green()),
           Line::from(text.as_str().bold().white()),
         ]))
       }
