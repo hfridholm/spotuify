@@ -91,7 +91,7 @@ fn build_authorization_url(
     .append_pair("client_id", client_id)
     .append_pair(
       "scope",
-      "user-read-playback-state user-modify-playback-state user-read-recently-played",
+      "user-read-playback-state user-modify-playback-state user-read-recently-played playlist-read-private playlist-modify-private playlist-modify-public playlist-read-collaborative user-follow-read user-follow-modify user-top-read",
     )
     .append_pair("code_challenge_method", "S256")
     .append_pair("code_challenge", challenge)
@@ -534,6 +534,46 @@ pub struct PlaylistItems {
 // Spotify API implementation
 // ============================================================================
 
+impl Playlists {
+  pub async fn get(api: &SpotifyApi, user_id: &str) -> Result<Self, Error> {
+    let response = api.client
+      .get(format!("https://api.spotify.com/v1/users/{user_id}/playlists"))
+      .bearer_auth(&api.access_token)
+      .send()
+      .await?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err("User got no playlists".into());
+    }
+
+    Ok(
+      response
+      .error_for_status()?
+      .json::<Playlists>()
+      .await?
+    )
+  }
+
+  pub async fn get_current_users(api: &SpotifyApi) -> Result<Self, Error> {
+    let response = api.client
+      .get("https://api.spotify.com/v1/me/playlists")
+      .bearer_auth(&api.access_token)
+      .send()
+      .await?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err("User got no playlists".into());
+    }
+
+    Ok(
+      response
+      .error_for_status()?
+      .json::<Playlists>()
+      .await?,
+    )
+  }
+}
+
 impl History {
   pub async fn get(
     api: &SpotifyApi,
@@ -545,9 +585,7 @@ impl History {
       .await?;
 
     if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "No recently played tracks".into()
-      );
+      return Err("No recently played tracks".into());
     }
 
     Ok(
@@ -577,9 +615,7 @@ impl Search {
       .error_for_status()?;
 
     if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "Nothing is currently playing".into()
-      );
+      return Err("Nothing is currently playing".into());
     }
 
     Ok(
@@ -626,9 +662,7 @@ impl User {
       .await?;
 
     if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "No user".into()
-      );
+      return Err("No user".into());
     }
 
     Ok(
@@ -651,9 +685,7 @@ impl Player {
       .await?;
 
     if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "Nothing is currently playing".into()
-      );
+      return Err("Nothing is currently playing".into());
     }
 
     Ok(

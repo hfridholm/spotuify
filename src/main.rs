@@ -54,9 +54,6 @@ use ratatui::{
     BorderType,
     Cell,
     LineGauge,
-    List,
-    ListItem,
-    ListState,
     Paragraph,
     Row,
     StatefulWidget,
@@ -147,18 +144,9 @@ enum AppWindow {
   #[default]
   History,
   Search,
-
   Home,
   Track,
   Artist,
-  /*
-  HomePlaylists,
-  HomeFollowing,
-
-  Artist,
-  ArtistAlbums,
-  ArtistPlaylists,
-  */
 }
 
 impl AppWindow {
@@ -179,7 +167,7 @@ impl AppWindow {
 
 // Note: the difference between AppFocus and AppWindow is that
 //       there can exist multiple focuses on one window
-//       example: ArtistAlbums, ArtistSongs
+//       example: ArtistAlbums, ArtistTracks
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum AppFocus {
   #[default]
@@ -194,17 +182,18 @@ enum AppFocus {
   SearchArtist,
   SearchPlaylist,
 
-  Home,
   Track,
-  Artist,
-  /*
+
+  Home,
   HomePlaylists,
+  HomeHistory,
   HomeFollowing,
 
   Artist,
+  /*
   ArtistAlbums,
   ArtistPlaylists,
-  ArtistSongs,
+  ArtistTracks,
   */
 }
 
@@ -253,11 +242,6 @@ enum Action {
   TableFirst,
   TableLast,
 
-  List1Next,
-  List1Previous,
-  List1First,
-  List1Last,
-
   PlayQueue,
   PlaySearch,
   PlayHistory,
@@ -275,8 +259,8 @@ enum Action {
   QueueUpdated   { queue:   Queue   },
   /*
   HistoryUpdated { history: History },
-  UserUpdated    { user:    User    },
   */
+  UserUpdated    { user:    User    },
 
   HomeEnter,
 
@@ -302,7 +286,9 @@ struct App {
   focus:         Arc<Mutex<AppFocus>>,
   window:        Arc<Mutex<AppWindow>>,
 
-  user:    User,
+  user:           User,
+  user_playlists: Playlists,
+
   player:  Player,
   queue:   Option<Queue>,
   history: Option<History>,
@@ -318,9 +304,6 @@ struct App {
 
   queue_state: TableState, // Maybe remove this, replace with table_state
   table_state: TableState,
-
-  list1_state: ListState, // Remove this, replace with list_index
-  list2_state: ListState, // Remove this
 
   list_index: usize,
 
@@ -338,6 +321,9 @@ impl App {
     // Maybe rename this to "api"
     let spotify = SpotifyApi::new().await?;
 
+    let user           = User::get(&spotify).await?;
+    let user_playlists = Playlists::get_current_users(&spotify).await?;
+
     let player = Player::get(&spotify).await?;
     let queue  = Queue::get(&spotify).await?;
 
@@ -347,7 +333,9 @@ impl App {
       focus:  Arc::new(Mutex::new(AppFocus::Player)),
       window: Arc::new(Mutex::new(AppWindow::Home)),
 
-      user:    User::default(),
+      user,
+      user_playlists,
+
       player,
       history: None, // Some(history),
       queue:   Some(queue),
@@ -363,9 +351,6 @@ impl App {
 
       queue_state: TableState::default(),
       table_state: TableState::default(),
-
-      list1_state: ListState::default(),
-      list2_state: ListState::default(),
 
       list_index: 0,
 
@@ -387,7 +372,7 @@ impl App {
     // Immediately fetch Spotify state.
     self.action_tx.send(Action::Refresh)?;
 
-    // Render playing song progress bar every 33 ms
+    // Render playing track progress bar every 33 ms
     let mut render_interval = time::interval(
       Duration::from_millis(33),
     );
@@ -470,6 +455,15 @@ impl App {
       AppFocus::Home | AppFocus::Track | AppFocus::Artist | AppFocus::History => {
         match action {
           Action::Up   => AppFocus::Navbar,
+          Action::Down => AppFocus::Player,
+          Action::Left => AppFocus::Queue,
+          _ => app_focus,
+        }
+      },
+
+      AppFocus::HomePlaylists | AppFocus::HomeHistory | AppFocus::HomeFollowing => {
+        match action {
+          Action::Up   => AppFocus::Home,
           Action::Down => AppFocus::Player,
           Action::Left => AppFocus::Queue,
           _ => app_focus,
@@ -627,38 +621,6 @@ impl App {
         self.queue_state.select_last();
       }
 
-      Action::List1Next => {
-        self.list1_state.select_next();
-      }
-
-      Action::List1Previous => {
-        self.list1_state.select_previous();
-      }
-
-      Action::List1First => {
-        self.list1_state.select_first();
-      }
-
-      Action::List1Last => {
-        self.list1_state.select_last();
-      }
-
-      Action::HomeEnter => {
-        let Some(index) =
-          self.list1_state.selected()
-        else {
-          return;
-        };
-
-        match index {
-          0 => self.set_window(AppWindow::History),
-
-          1 => self.set_window(AppWindow::History),
-
-          _ => {},
-        }
-      }
-
       Action::PlayQueue => {
         self.spawn_play_queue();
       }
@@ -695,6 +657,10 @@ impl App {
       Action::PlayerUpdated { player } => {
         self.player = player;
         self.last_player_update = std::time::Instant::now();
+      }
+
+      Action::UserUpdated { user } => {
+        self.user = user;
       }
 
       Action::QueueUpdated { queue } => {
@@ -760,6 +726,14 @@ impl App {
         self.set_focus(focus);
         self.search_type = search_type;
       }
+
+      Action::HomeEnter => {
+        match self.list_index {
+          0 => self.set_window(AppWindow::History),
+          1 => self.set_window(AppWindow::History),
+          _ => {},
+        }
+      }
     }
   }
 
@@ -767,7 +741,7 @@ impl App {
   // Progress
   // ------------------------------------------------------------------------
 
-  // Artificially (locally) update the progress time of the playing song
+  // Artificially (locally) update the progress time of the playing track
   fn update_progress(&mut self) {
     if !self.player.is_playing {
       return;
@@ -824,7 +798,7 @@ impl App {
 
   fn spawn_refresh(&self) {
     let spotify = self.spotify.clone();
-    let tx = self.action_tx.clone();
+    let tx      = self.action_tx.clone();
 
     tokio::spawn(async move {
       match spotify.get_player().await {
@@ -844,13 +818,33 @@ impl App {
 
     // Clone again
     let spotify = self.spotify.clone();
-    let tx = self.action_tx.clone();
+    let tx      = self.action_tx.clone();
 
     tokio::spawn(async move {
       match spotify.get_queue().await {
         Ok(queue) => {
           let _ = tx.send(
             Action::QueueUpdated { queue },
+          );
+        }
+
+        Err(err) => {
+          let _ = tx.send(
+            Action::Error(err.to_string()),
+          );
+        }
+      }
+    });
+
+    // Clone again
+    let spotify = self.spotify.clone();
+    let tx      = self.action_tx.clone();
+
+    tokio::spawn(async move {
+      match spotify.get_user().await {
+        Ok(user) => {
+          let _ = tx.send(
+            Action::UserUpdated { user },
           );
         }
 
@@ -1047,12 +1041,6 @@ impl App {
   }
 
   fn spawn_play_history(&self) {
-    let Some(index) =
-      self.list1_state.selected()
-    else {
-      return;
-    };
-
     let Some(track) = self.history
       .as_ref()
       .and_then(|history| {
@@ -1061,7 +1049,7 @@ impl App {
           .filter_map(|item| {
             item.track.as_ref()
           })
-        .nth(index)
+        .nth(self.list_index)
       })
     else {
       return;
@@ -1139,12 +1127,6 @@ impl App {
   }
 
   fn spawn_queue_history(&self) {
-    let Some(index) =
-      self.list1_state.selected()
-    else {
-      return;
-    };
-
     let Some(track) = self.history
       .as_ref()
       .and_then(|history| {
@@ -1154,7 +1136,7 @@ impl App {
           .filter_map(|item| {
             item.track.as_ref()
           })
-        .nth(index)
+        .nth(self.list_index)
       })
     else {
       return;
@@ -2146,7 +2128,6 @@ impl App {
     };
 
     let block = Self::panel(" Home ", color, border_type);
-
     block.clone().render(area, buf);
 
     let inner = block.inner(area);
@@ -2157,33 +2138,38 @@ impl App {
     ])
       .areas(inner);
 
-    Paragraph::new(Line::from(format!("{}", self.user.display_name)))
+    Paragraph::new(Line::from(self.user.display_name.as_str()))
       .centered()
       .wrap(Wrap { trim: true })
       .render(title_area, buf);
 
-    let items = ["History", "History"];
+    let items = ["Playlists", "History"];
 
-    let list = List::new(
-      items.iter()
-      .map(|item| ListItem::new(*item))
-      .collect::<Vec<_>>(),
-    )
-      .style(Style::default()
-        .fg(Color::White)
-      )
-      .highlight_style(Style::default()
-        .bg(Color::Gray)
-        .fg(Color::Black)
-      )
-      .highlight_symbol(">> ");
+    for (index, item) in items.iter().enumerate() {
+      // Stop rendering items outside the available area.
+      if index >= list_area.height as usize {
+        break;
+      }
 
-    StatefulWidget::render(
-      list,
-      list_area,
-      buf,
-      &mut self.list1_state,
-    );
+      let item_area = Rect {
+        x: list_area.x,
+        y: list_area.y + index as u16,
+        width: list_area.width,
+        height: 1,
+      };
+
+      let style = if index == self.list_index {
+        Style::default()
+          .bg(Color::Gray)
+          .fg(Color::Black)
+      } else {
+        Style::default().fg(Color::White)
+      };
+
+      Paragraph::new(*item)
+        .style(style)
+        .render(item_area, buf);
+    }
   }
 
   fn render_history(
@@ -2613,20 +2599,12 @@ fn home_key_action(
       Action::HomeEnter
     }
 
-    KeyCode::Down | KeyCode::Char('j') => {
-      Action::List1Next
+    KeyCode::Tab | KeyCode::Right | KeyCode::Char('j') => {
+      Action::ListNext { max: 2 }
     }
 
-    KeyCode::Up | KeyCode::Char('k') => {
-      Action::List1Previous
-    }
-
-    KeyCode::Home => {
-      Action::List1First
-    }
-
-    KeyCode::End => {
-      Action::List1Last
+    KeyCode::BackTab | KeyCode::Left | KeyCode::Char('k') => {
+      Action::ListPrev
     }
 
     _ => Action::Render,
