@@ -5,15 +5,21 @@
  * |___|_| |_|___/\__|_|   \__,_|\___|\__|_|\___/|_| |_|___/
  */
 
-use crate::app::App;
-use crate::ui::AppFocus;
+use super::{
+  App,
+  AppFocus,
+};
 
 use ratatui::{
-    buffer::Buffer,
-    layout::{Rect},
-    style::{Stylize},
-    text::{Line},
-    widgets::{Paragraph, Widget, Wrap},
+  buffer::Buffer,
+  layout::Rect,
+  style::Stylize,
+  text::Line,
+  widgets::{
+    Paragraph,
+    Widget,
+    Wrap
+  },
 };
 
 impl App {

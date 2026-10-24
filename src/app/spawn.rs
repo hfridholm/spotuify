@@ -8,8 +8,11 @@
 
 use crate::api::SpotifyApi;
 
-use super::{Action, App};
-use crate::app::AppWindow;
+use super::{
+  AppWindow,
+  App,
+  Action
+};
 
 impl App {
   pub(crate) fn spawn_pause(&self) {

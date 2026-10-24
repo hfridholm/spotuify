@@ -5,14 +5,28 @@
  * |_| \_|\___/ \__|_|_| |_|\___\__,_|\__|_|\___/|_| |_|___/
  */
 
-use crate::app::App;
+use super::App;
 
 use ratatui::{
-    buffer::Buffer,
-    layout::{Rect},
-    style::{Color, Style, Stylize},
-    text::{Line, Text},
-    widgets::{Block, BorderType, Paragraph, Widget, Clear, Wrap},
+  buffer::Buffer,
+  layout::Rect,
+  style::{
+    Color,
+    Style, 
+    Stylize
+  },
+  text::{
+    Line,
+    Text
+  },
+  widgets::{
+    Block,
+    BorderType,
+    Paragraph,
+    Widget,
+    Clear,
+    Wrap
+  },
 };
 
 impl App {

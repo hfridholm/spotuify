@@ -10,7 +10,7 @@ use crossterm::event::{
   KeyEvent,
 };
 
-use crate::Action;
+use super::Action;
 
 pub(crate) fn navbar_key_action(
   key: KeyEvent,

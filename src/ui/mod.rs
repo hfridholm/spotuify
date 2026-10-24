@@ -24,12 +24,27 @@ use crate::app::{
   AppFocus,
 };
 
+use helpers::format_ms;
+
 use ratatui::{
   buffer::Buffer,
-  layout::{Constraint, Layout, Rect, Direction},
-  style::{Color, Style, Stylize},
-  text::{Line},
-  widgets::{Block, BorderType, Widget},
+  layout::{
+    Constraint,
+    Layout,
+    Rect,
+    Direction
+  },
+  style::{
+    Color,
+    Style,
+    Stylize
+  },
+  text::Line,
+  widgets::{
+    Block,
+    BorderType,
+    Widget
+  },
   Frame,
 };
 

@@ -16,7 +16,10 @@ use crossterm::event::{
   KeyCode, KeyEvent, KeyModifiers,
 };
 
-use crate::app::{Action, AppFocus};
+use super::{
+  Action,
+  AppFocus
+};
 
 pub(crate) fn key_to_action(
   app_focus: AppFocus,

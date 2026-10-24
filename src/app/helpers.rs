@@ -6,8 +6,10 @@
  *              |_|           
  */
 
-use crate::app::App;
-use crate::error::Error;
+use super::{
+  App,
+  Error
+};
 
 impl App {
   pub(crate) fn get_volume_percent(&self) -> Result<u8, Error> {

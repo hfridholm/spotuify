@@ -6,13 +6,13 @@
  */
 
 use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+  Arc,
+  atomic::{AtomicU64, Ordering},
 };
 
 use tokio::time::{sleep, Duration};
 
-use crate::app::App;
+use super::App;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 

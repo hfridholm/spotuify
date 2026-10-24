@@ -10,8 +10,10 @@ use crossterm::event::{
   KeyEvent,
 };
 
-use crate::Action;
-use crate::input::AppFocus;
+use super::{
+  Action,
+  AppFocus
+};
 
 pub(crate) fn home_key_action(
   key: KeyEvent,

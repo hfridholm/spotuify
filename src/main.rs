@@ -6,111 +6,17 @@
  *     |_|                          |___/ 
  */
 
-/*
-use std::{
-  sync::{
-    Arc,
-    Mutex,
-    atomic::{AtomicU64, Ordering},
-  },
-  collections::VecDeque,
-};
-
-use crossterm::event::{
-  self,
-  Event,
-  KeyCode,
-  KeyEvent,
-  KeyEventKind,
-  KeyModifiers,
-};
-
-use ratatui::{
-  buffer::Buffer,
-  layout::{
-    Constraint,
-    Layout,
-    Rect,
-    Direction,
-    Spacing,
-  },
-  style::{
-    Color,
-    Style,
-    Stylize,
-    Modifier,
-  },
-  symbols::{
-    border,
-    merge::MergeStrategy,
-  },
-  symbols,
-  text::{
-    Line,
-    Text,
-    Span,
-  },
-  widgets::{
-    Block,
-    BorderType,
-    Cell,
-    LineGauge,
-    Paragraph,
-    Row,
-    StatefulWidget,
-    Table,
-    TableState,
-    Tabs,
-    Widget,
-    Wrap,
-    Borders,
-    Clear,
-  },
-  DefaultTerminal,
-  Frame,
-};
-
-use tokio::{
-  sync::mpsc::{
-    self,
-    UnboundedReceiver,
-    UnboundedSender,
-  },
-  time,
-  time::{sleep, Duration},
-};
-
-mod api;
-use crate::api::{
-  SpotifyApi,
-  User,
-  Player,
-  History,
-  Queue,
-  Search,
-  SimplifiedTracks,
-  Tracks,
-  Track,
-  Artists,
-  Artist,
-  Albums,
-  Album,
-  Playlists,
-  Playlist,
-};
-*/
-
 mod app;
 mod input;
 mod ui;
 mod api;
 mod error;
 
-
-use crate::error::Error;
-
-use app::App;
-use crate::app::Action;
+use error::Error;
+use app::{
+  Action,
+  App
+};
 
 use tokio::sync::mpsc;
 
@@ -126,7 +32,6 @@ async fn main() -> Result<(), Error> {
   input::spawn_event_handler(
     action_tx.clone(),
     app.focus.clone(),
-    app.window.clone(),
   );
 
   let mut terminal = ratatui::init();

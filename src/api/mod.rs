@@ -10,9 +10,7 @@ use crate::error::Error;
 
 use std::{
   env,
-  sync::{
-    Arc,
-  },
+  sync::Arc,
 };
 
 use url::Url;
@@ -45,7 +43,6 @@ use tiny_http::{
   Response,
   Server,
 };
-
 
 // ============================================================================
 // Spotify OAuth

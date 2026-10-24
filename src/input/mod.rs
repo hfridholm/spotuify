@@ -8,17 +8,27 @@
 
 mod keymap;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+  Arc,
+  Mutex
+};
 
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{
+  self,
+  Event,
+  KeyEventKind
+};
+
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::app::{Action, AppFocus, AppWindow};
+use crate::app::{
+  Action, 
+  AppFocus,
+};
 
 pub fn spawn_event_handler(
   tx: UnboundedSender<Action>,
   app_focus:  Arc<Mutex<AppFocus>>,
-  app_window: Arc<Mutex<AppWindow>>,
 ) {
   tokio::spawn(async move {
     loop {

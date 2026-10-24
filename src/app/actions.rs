@@ -5,13 +5,19 @@
  * /_/   \_\___|\__|_|\___/|_| |_|
  */
 
-use crate::app::App;
-use crate::app::AppWindow;
-use crate::app::AppFocus;
-
 use crate::api::{
-    Player, Queue, Search, SimplifiedTracks,
-    SpotifyApi, User,
+  Player,
+  Queue,
+  Search,
+  SimplifiedTracks,
+  SpotifyApi,
+  User
+};
+
+use super::{
+  App,
+  AppWindow,
+  AppFocus,
 };
 
 #[derive(Debug, Clone)]

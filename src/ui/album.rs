@@ -5,13 +5,22 @@
  * /_/   \_\_|_.__/ \__,_|_| |_| |_|
  */
 
-use crate::app::App;
-use crate::ui::AppFocus;
+use super::{
+  App,
+  AppFocus
+};
 
 use ratatui::{
   buffer::Buffer,
-  text::{Line},
-  widgets::{Block, BorderType, Table, Row, StatefulWidget, Cell},
+  text::Line,
+  widgets::{
+    Block,
+    BorderType,
+    Table,
+    Row,
+    StatefulWidget,
+    Cell
+  },
   style::{
     Color,
     Style,

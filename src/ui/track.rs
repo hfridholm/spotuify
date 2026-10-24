@@ -5,16 +5,32 @@
  *   |_||_|  \__,_|\___|_|\_\
  */
 
-use crate::app::App;
-use crate::ui::helpers::format_ms;
-use crate::ui::AppFocus;
+use super::{
+  App,
+  AppFocus,
+  format_ms,
+};
 
 use ratatui::{
-    buffer::Buffer,
-    layout::{Constraint, Rect},
-    style::{Color, Style, Stylize},
-    text::{Line},
-    widgets::{Block, BorderType, Widget, Table, Row, Cell},
+  buffer::Buffer,
+  layout::{
+    Constraint,
+    Rect
+  },
+  style::{
+    Color,
+    Style,
+    Stylize
+  },
+  text::Line,
+  widgets::{
+    Block,
+    BorderType,
+    Widget,
+    Table,
+    Row,
+    Cell
+  },
 };
 
 impl App {

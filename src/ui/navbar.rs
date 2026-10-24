@@ -5,13 +5,20 @@
  * |_| \_|\__,_| \_/ |_.__/ \__,_|_|   
  */
 
-use crate::app::App;
-use crate::ui::AppFocus;
-use crate::ui::AppWindow;
+use super::{
+  App,
+  AppFocus,
+  AppWindow,
+};
 
 use ratatui::{
   buffer::Buffer,
-  widgets::{Block, BorderType, Paragraph, Widget},
+  widgets::{
+    Block,
+    BorderType,
+    Paragraph,
+    Widget
+  },
   style::{
     Color,
     Style,

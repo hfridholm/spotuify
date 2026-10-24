@@ -5,16 +5,26 @@
  * |____/ \___|\__,_|_|  \___|_| |_|
  */
 
-use crate::app::App;
-use crate::ui::AppFocus;
+use super::{
+  App,
+  AppFocus,
+};
 
 use ratatui::{
   buffer::Buffer,
-  text::{Line},
-  widgets::{Block, BorderType, Paragraph, Widget, Table, Row, Cell, Tabs, StatefulWidget},
-  symbols::{
-    merge::MergeStrategy,
+  text::Line,
+  widgets::{
+    Block,
+    BorderType, 
+    Paragraph,
+    Widget,
+    Table,
+    Row,
+    Cell,
+    Tabs,
+    StatefulWidget
   },
+  symbols::merge::MergeStrategy,
   style::{
     Color,
     Style,

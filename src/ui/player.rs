@@ -6,13 +6,23 @@
  *                |___/           
  */
 
-use crate::app::App;
-use crate::ui::AppFocus;
+use super::{
+  App,
+  AppFocus,
+};
 
 use ratatui::{
   buffer::Buffer,
-  text::{Line, Text},
-  widgets::{BorderType, LineGauge, Paragraph, Widget},
+  text::{
+    Line,
+    Text
+  },
+  widgets::{
+    BorderType,
+    LineGauge,
+    Paragraph,
+    Widget
+  },
   style::{
     Color,
     Style,

@@ -11,7 +11,7 @@ use crossterm::event::{
   KeyEvent,
 };
 
-use crate::Action;
+use super::Action;
 
 pub(crate) fn player_key_action(
   key: KeyEvent,

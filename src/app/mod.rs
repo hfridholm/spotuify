@@ -13,7 +13,11 @@ mod notifications;
 mod spawn;
 
 pub use actions::Action;
-pub use focus::{AppFocus, AppWindow};
+pub use focus::{
+  AppFocus, AppWindow
+};
+
+use crate::error::Error;
 
 use crate::api::{
   Album, Artist, History, Player, Playlist, Playlists,
@@ -30,18 +34,16 @@ use tokio::{
     UnboundedReceiver,
     UnboundedSender,
   },
-  time,
-  time::{Duration},
+  time::{
+    self,
+    Duration
+  },
 };
 
 use ratatui::{
-  widgets::{
-    TableState,
-  },
+  widgets::TableState,
   DefaultTerminal,
 };
-
-type Error = Box<dyn std::error::Error + Send + Sync>;
 
 pub struct App {
   pub(crate) spotify: SpotifyApi,
@@ -67,8 +69,8 @@ pub struct App {
   pub(crate) album: Option<Album>,
   pub(crate) album_tracks: Option<SimplifiedTracks>,
 
-  pub(crate) queue_state: ratatui::widgets::TableState,
-  pub(crate) table_state: ratatui::widgets::TableState,
+  pub(crate) queue_state: TableState,
+  pub(crate) table_state: TableState,
 
   pub(crate) list_index: usize,
   pub(crate) tab_index: usize,
