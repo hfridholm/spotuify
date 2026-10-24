@@ -448,6 +448,14 @@ pub struct Tracks {
   pub items: Vec<Track>,
 }
 
+// Spotify: Array of SimplifiedTrackObjects
+#[derive(Default, Debug, Clone, Deserialize)]
+pub struct SimplifiedTracks {
+  pub limit: u32,
+  pub total: u32,
+  pub items: Vec<SimplifiedTrack>,
+}
+
 // Spotify: Artists
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct Artists {
@@ -487,6 +495,16 @@ pub struct Context {
 #[derive(Default, Debug, Clone, Deserialize)]
 pub struct Track {
   pub album:       Album,
+  pub id:          String,
+  pub name:        String,
+  pub uri:         String,
+  pub duration_ms: u32,
+  pub artists:     Vec<Artist>,
+}
+
+// Spotify: SimplifiedTrackObject
+#[derive(Default, Debug, Clone, Deserialize)]
+pub struct SimplifiedTrack {
   pub id:          String,
   pub name:        String,
   pub uri:         String,
@@ -540,6 +558,27 @@ pub struct PlaylistItems {
 // ============================================================================
 // Spotify API implementation
 // ============================================================================
+
+impl Album {
+  pub async fn get_tracks(&self, api: &SpotifyApi) -> Result<SimplifiedTracks, Error> {
+    let response = api.client
+      .get(format!("https://api.spotify.com/v1/albums/{}/tracks", &self.id))
+      .bearer_auth(&api.access_token)
+      .send()
+      .await?;
+
+    if response.status() == reqwest::StatusCode::NO_CONTENT {
+      return Err("Album got no tracks".into());
+    }
+
+    Ok(
+      response
+      .error_for_status()?
+      .json::<SimplifiedTracks>()
+      .await?
+    )
+  }
+}
 
 impl Playlists {
   pub async fn get(api: &SpotifyApi, user_id: &str) -> Result<Self, Error> {

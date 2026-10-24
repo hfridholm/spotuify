@@ -87,6 +87,7 @@ use crate::api::{
   History,
   Queue,
   Search,
+  SimplifiedTracks,
   Tracks,
   Track,
   Artists,
@@ -122,6 +123,7 @@ enum AppWindow {
   Home,
   Track,
   Artist,
+  Album,
   Playlist,
 }
 
@@ -132,6 +134,7 @@ impl AppWindow {
       Self::Home     => AppFocus::Home,
       Self::Track    => AppFocus::Track,
       Self::Artist   => AppFocus::Artist,
+      Self::Album    => AppFocus::Album,
       Self::Playlist => AppFocus::Playlist,
     }
   }
@@ -159,6 +162,7 @@ enum AppFocus {
   SearchPlaylist,
 
   Track,
+  Album,
   Playlist,
 
   Home,
@@ -232,14 +236,17 @@ enum Action {
   SearchDelete,
   ShowSearchTrack,
   ShowSearchArtist,
+  ShowSearchAlbum,
+
+  AlbumTracksUpdated { tracks: SimplifiedTracks },
 
   SearchUpdated  { search:  Search  },
   PlayerUpdated  { player:  Player  },
   QueueUpdated   { queue:   Queue   },
+  UserUpdated    { user:    User    },
   /*
   HistoryUpdated { history: History },
   */
-  UserUpdated    { user:    User    },
 
   SetWindow { window: AppWindow },
   SetFocus  { focus:  AppFocus  },
@@ -275,8 +282,10 @@ struct App {
 
   track:    Option<Track>,
   artist:   Option<Artist>,
-  album:    Option<Album>,
   playlist: Option<Playlist>,
+
+  album:        Option<Album>,
+  album_tracks: Option<SimplifiedTracks>,
 
   queue_state: TableState, // Maybe remove this, replace with table_state
   table_state: TableState,
@@ -322,8 +331,10 @@ impl App {
 
       track:    None,
       artist:   None,
-      album:    None,
       playlist: None,
+
+      album:        None,
+      album_tracks: None,
 
       queue_state: TableState::default(),
       table_state: TableState::default(),
@@ -700,6 +711,14 @@ impl App {
         }
       }
 
+      Action::ShowSearchAlbum => {
+        self.spawn_show_search_album();
+      }
+
+      Action::AlbumTracksUpdated { tracks } => {
+        self.album_tracks = Some(tracks);
+      }
+
       Action::ShowHomePlaylist => {
         let Some(index) =
           self.table_state.selected()
@@ -766,6 +785,38 @@ impl App {
   // ------------------------------------------------------------------------
   // Async Spotify operations
   // ------------------------------------------------------------------------
+
+  fn spawn_show_search_album(&mut self) {
+    let Some(index) =
+      self.table_state.selected()
+    else {
+      return;
+    };
+
+    if let Some(album) = self.search.albums.items.get(index).cloned() {
+      self.album = Some(album.clone());
+      self.set_window(AppWindow::Album);
+
+      let spotify = self.spotify.clone();
+      let tx      = self.action_tx.clone();
+
+      tokio::spawn(async move {
+        match album.get_tracks(&spotify).await {
+          Ok(tracks) => {
+            let _ = tx.send(
+              Action::AlbumTracksUpdated { tracks },
+            );
+          }
+
+          Err(err) => {
+            let _ = tx.send(
+              Action::Error(err.to_string()),
+            );
+          }
+        }
+      });
+    }
+  } 
 
   fn spawn_error(&self, error: String) {
     let error_list = Arc::clone(&self.error_list);
@@ -1658,8 +1709,8 @@ impl App {
       AppWindow::Search   => self.render_search(area, buf),
       AppWindow::Track    => self.render_track(area, buf),
       AppWindow::Artist   => self.render_artist(area, buf),
+      AppWindow::Album    => self.render_album(area, buf),
       AppWindow::Playlist => self.render_playlist(area, buf),
-      _ => {},
     };
   }
 
@@ -2407,6 +2458,101 @@ impl App {
     );
   }
 
+  fn render_album(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let is_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::Album,
+      Err(_) => return,
+    };
+
+    let album = match &self.album {
+      Some(album) => album,
+      None => return,
+    };
+
+    let (block_color, header_color, border_type) = if is_focus {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      )
+      .title(
+        Line::from(format!(" {} ", album.name.to_string()).bold())
+        .left_aligned(),
+      );
+
+    let header = Row::new([
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+      Cell::from("AGO"),
+    ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
+      .bold();
+
+    let no_tracks = || {
+      Row::new([
+        Cell::from(""),
+        Cell::from("No Tracks"),
+        Cell::from(""),
+      ])
+    };
+
+    /*
+    let rows = &self.album_tracks
+          .iter()
+          .enumerate()
+          .map(|(index, track)| {
+            Row::new([
+              Cell::from(format!("{:>2}", index + 1)),
+              Cell::from(track.name.as_str()),
+              Cell::from(track.name.as_str()),
+            ])
+          })
+        .collect::<Vec<_>>()
+      })
+    .filter(|items| !items.is_empty())
+      .unwrap_or_else(|| vec![no_tracks()]);
+    */
+
+    let rows = vec![no_tracks()];
+
+    let table = Table::new(rows, [
+      Constraint::Length(2),
+      Constraint::Min(10),
+      Constraint::Length(3),
+    ])
+      .header(header)
+      .column_spacing(2)
+      .block(block)
+      .style(
+        Style::default()
+        .fg(Color::White),
+      )
+      .row_highlight_style(
+        Style::default()
+        .bg(Color::Gray),
+      );
+
+    StatefulWidget::render(
+      table,
+      area,
+      buf,
+      &mut self.table_state,
+    );
+  }
+
   fn render_playlist(
     &mut self,
     area: Rect,
@@ -2998,6 +3144,10 @@ fn search_album_key_action(
   key: KeyEvent,
 ) -> Action {
   match key.code {
+    KeyCode::Enter => {
+      Action::ShowSearchAlbum
+    }
+
     KeyCode::Down | KeyCode::Char('j') => {
       Action::TableNext
     }
