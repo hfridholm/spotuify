@@ -122,15 +122,17 @@ enum AppWindow {
   Home,
   Track,
   Artist,
+  Playlist,
 }
 
 impl AppWindow {
   fn get_focus(&self) -> AppFocus {
     match self {
-      Self::Search  => AppFocus::SearchTrack,
-      Self::Home    => AppFocus::Home,
-      Self::Track   => AppFocus::Track,
-      Self::Artist  => AppFocus::Artist,
+      Self::Search   => AppFocus::SearchTrack,
+      Self::Home     => AppFocus::Home,
+      Self::Track    => AppFocus::Track,
+      Self::Artist   => AppFocus::Artist,
+      Self::Playlist => AppFocus::Playlist,
     }
   }
 }
@@ -157,6 +159,7 @@ enum AppFocus {
   SearchPlaylist,
 
   Track,
+  Playlist,
 
   Home,
   HomePlaylists,
@@ -221,6 +224,8 @@ enum Action {
   PlayHistory,
 
   QueueHistory,
+
+  ShowHomePlaylist,
 
   Search,
   SearchInsert { to_insert: char },
@@ -425,7 +430,7 @@ impl App {
         }
       },
 
-      AppFocus::Track | AppFocus::Artist => {
+      AppFocus::Track | AppFocus::Artist | AppFocus::Playlist => {
         match action {
           Action::Up   => AppFocus::Navbar,
           Action::Down => AppFocus::Player,
@@ -692,6 +697,19 @@ impl App {
         if let Some(artist) = self.search.artists.items.get(index) {
           self.artist = Some(artist.clone());
           self.set_window(AppWindow::Artist);
+        }
+      }
+
+      Action::ShowHomePlaylist => {
+        let Some(index) =
+          self.table_state.selected()
+        else {
+          return;
+        };
+
+        if let Some(playlist) = self.user_playlists.items.get(index) {
+          self.playlist = playlist.clone();
+          self.set_window(AppWindow::Playlist);
         }
       }
 
@@ -1348,8 +1366,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let is_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::Track,
       Err(_) => return,
     };
 
@@ -1358,7 +1376,7 @@ impl App {
       None => return,
     };
 
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::Track {
+    let (block_color, header_color, border_type) = if is_focus {
       (Color::Green, Color::Yellow, BorderType::Thick)
     } else {
       (Color::White, Color::White, BorderType::Plain)
@@ -1636,10 +1654,11 @@ impl App {
     };
 
     match app_window {
-      AppWindow::Home    => self.render_home(area, buf),
-      AppWindow::Search  => self.render_search(area, buf),
-      AppWindow::Track   => self.render_track(area, buf),
-      AppWindow::Artist  => self.render_artist(area, buf),
+      AppWindow::Home     => self.render_home(area, buf),
+      AppWindow::Search   => self.render_search(area, buf),
+      AppWindow::Track    => self.render_track(area, buf),
+      AppWindow::Artist   => self.render_artist(area, buf),
+      AppWindow::Playlist => self.render_playlist(area, buf),
       _ => {},
     };
   }
@@ -2332,53 +2351,134 @@ impl App {
       )
       .bold();
 
-    let rows = match &self.history {
-      Some(history) if !history.items.is_empty() => {
-        let items = history.items
+    let no_history = || {
+      Row::new([
+        Cell::from(""),
+        Cell::from("No history"),
+        Cell::from(""),
+      ])
+    };
+
+    let rows = self.history
+      .as_ref()
+      .map(|history| {
+        history.items
           .iter()
           .filter_map(|played_track| {
             played_track.track
               .as_ref()
-              .map(|track| {
-                (played_track, track)
-              })
-            },
-          )
-          .enumerate()
+              .map(|track| (played_track, track))
+          })
+        .enumerate()
           .map(|(index, (played_track, track))| {
-            let time_str = format_ms(played_track.get_elapsed());
-
             Row::new([
               Cell::from(format!("{:>2}", index + 1)),
               Cell::from(track.name.as_str()),
-              Cell::from(time_str),
+              Cell::from(format_ms(played_track.get_elapsed())),
             ])
           })
-            .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+      })
+    .filter(|items| !items.is_empty())
+      .unwrap_or_else(|| vec![no_history()]);
 
-        if items.is_empty() {
-          vec![
-            Row::new([
-              Cell::from(""),
-              Cell::from("No history"),
-              Cell::from(""),
-            ])
-          ]
-        } else {
-          items
-        }
-      }
+    let table = Table::new(rows, [
+      Constraint::Length(2),
+      Constraint::Min(10),
+      Constraint::Length(3),
+    ])
+      .header(header)
+      .column_spacing(2)
+      .block(block)
+      .style(
+        Style::default()
+        .fg(Color::White),
+      )
+      .row_highlight_style(
+        Style::default()
+        .bg(Color::Gray),
+      );
 
-      _ => {
-        vec![
-          Row::new([
-            Cell::from(""),
-            Cell::from("No history"),
-            Cell::from(""),
-          ])
-        ]
-      }
+    StatefulWidget::render(
+      table,
+      area,
+      buf,
+      &mut self.table_state,
+    );
+  }
+
+  fn render_playlist(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let is_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::Playlist,
+      Err(_) => return,
     };
+
+    let playlist = match &self.playlist {
+      Some(playlist) => playlist,
+      None => return,
+    };
+
+    let (block_color, header_color, border_type) = if is_focus {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      )
+      .title(
+        Line::from(format!(" {} ", playlist.name.to_string()).bold())
+        .left_aligned(),
+      );
+
+    let header = Row::new([
+      Cell::from(" #"),
+      Cell::from("TRACK"),
+      Cell::from("AGO"),
+    ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
+      .bold();
+
+    let no_tracks = || {
+      Row::new([
+        Cell::from(""),
+        Cell::from("No Tracks"),
+        Cell::from(""),
+      ])
+    };
+
+    /*
+    let rows = playlist
+      .as_ref()
+      .map(|playlist| {
+        playlist.items.items
+          .iter()
+          .enumerate()
+          .map(|(index, track)| {
+            Row::new([
+              Cell::from(format!("{:>2}", index + 1)),
+              Cell::from(track.name.as_str()),
+              Cell::from(track.name.as_str()),
+            ])
+          })
+        .collect::<Vec<_>>()
+      })
+    .filter(|items| !items.is_empty())
+      .unwrap_or_else(|| vec![no_tracks()]);
+    */
+
+    let rows = vec![no_tracks()];
 
     let table = Table::new(rows, [
       Constraint::Length(2),
@@ -2770,6 +2870,10 @@ fn home_playlists_key_action(
   key: KeyEvent,
 ) -> Action {
   match key.code {
+    KeyCode::Enter => {
+      Action::ShowHomePlaylist
+    }
+
     KeyCode::Down | KeyCode::Char('j') => {
       Action::TableNext
     }
