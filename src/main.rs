@@ -102,30 +102,6 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 // ============================================================================
-// SearchType
-// ============================================================================
-
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-enum SearchType {
-  #[default]
-  SearchTrack,
-  SearchArtist,
-  SearchAlbum,
-  SearchPlaylist,
-}
-
-impl SearchType {
-  fn get_focus(&self) -> AppFocus {
-    match self {
-      Self::SearchTrack    => AppFocus::SearchTrack,
-      Self::SearchArtist   => AppFocus::SearchArtist,
-      Self::SearchAlbum    => AppFocus::SearchAlbum,
-      Self::SearchPlaylist => AppFocus::SearchPlaylist,
-    }
-  }
-}
-
-// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -142,7 +118,6 @@ fn format_ms(ms: u32) -> String {
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum AppWindow {
   #[default]
-  History,
   Search,
   Home,
   Track,
@@ -152,7 +127,6 @@ enum AppWindow {
 impl AppWindow {
   fn get_focus(&self) -> AppFocus {
     match self {
-      Self::History => AppFocus::History,
       Self::Search  => AppFocus::SearchTrack,
       Self::Home    => AppFocus::Home,
       Self::Track   => AppFocus::Track,
@@ -262,12 +236,10 @@ enum Action {
   */
   UserUpdated    { user:    User    },
 
-  HomeEnter,
-
   SetWindow { window: AppWindow },
   SetFocus  { focus:  AppFocus  },
 
-  SetSearchType { search_type: SearchType },
+  SetFocusAndTabIndex { focus: AppFocus, tab_index: usize },
 
   Error(String),
   Message(String),
@@ -294,7 +266,6 @@ struct App {
   history: Option<History>,
 
   search:        Search,
-  search_type:   SearchType,
   search_buffer: String,
 
   track:    Option<Track>,
@@ -306,6 +277,7 @@ struct App {
   table_state: TableState,
 
   list_index: usize,
+  tab_index:  usize,
 
   action_tx:     UnboundedSender<Action>,
 
@@ -341,7 +313,6 @@ impl App {
       queue:   Some(queue),
 
       search:        Search::default(),
-      search_type:   SearchType::SearchTrack,
       search_buffer: String::default(),
 
       track:    None,
@@ -353,6 +324,7 @@ impl App {
       table_state: TableState::default(),
 
       list_index: 0,
+      tab_index:  0,
 
       action_tx,
 
@@ -430,11 +402,12 @@ impl App {
       AppFocus::Search => {
         match action {
           Action::Down => {
-            match self.search_type {
-              SearchType::SearchTrack    => AppFocus::SearchTrack,
-              SearchType::SearchAlbum    => AppFocus::SearchAlbum,
-              SearchType::SearchArtist   => AppFocus::SearchArtist,
-              SearchType::SearchPlaylist => AppFocus::SearchPlaylist,
+            match self.tab_index {
+              0 => AppFocus::SearchTrack,
+              1 => AppFocus::SearchAlbum,
+              2 => AppFocus::SearchArtist,
+              3 => AppFocus::SearchPlaylist,
+              _ => app_focus,
             }
           },
           Action::Left => AppFocus::Queue,
@@ -452,11 +425,26 @@ impl App {
         }
       },
 
-      AppFocus::Home | AppFocus::Track | AppFocus::Artist | AppFocus::History => {
+      AppFocus::Track | AppFocus::Artist => {
         match action {
           Action::Up   => AppFocus::Navbar,
           Action::Down => AppFocus::Player,
           Action::Left => AppFocus::Queue,
+          _ => app_focus,
+        }
+      },
+
+      AppFocus::Home => {
+        match action {
+          Action::Down => {
+            match self.tab_index {
+              0 => AppFocus::HomeHistory,
+              1 => AppFocus::HomePlaylists,
+              _ => app_focus,
+            }
+          },
+          Action::Left => AppFocus::Queue,
+          Action::Up   => AppFocus::Navbar,
           _ => app_focus,
         }
       },
@@ -514,6 +502,7 @@ impl App {
 
     // Update focus based on window default
     self.set_focus(window.get_focus());
+    self.tab_index = 0;
   }
   
   fn update(&mut self, action: Action) {
@@ -651,6 +640,8 @@ impl App {
 
       Action::SearchUpdated { search } => {
         self.search = search;
+
+        self.tab_index = 0;
         self.set_focus(AppFocus::SearchTrack);
       }
 
@@ -720,19 +711,9 @@ impl App {
         self.set_focus(focus);
       }
 
-      Action::SetSearchType { search_type } => {
-        let focus = search_type.get_focus();
-
+      Action::SetFocusAndTabIndex { focus, tab_index } => {
         self.set_focus(focus);
-        self.search_type = search_type;
-      }
-
-      Action::HomeEnter => {
-        match self.list_index {
-          0 => self.set_window(AppWindow::History),
-          1 => self.set_window(AppWindow::History),
-          _ => {},
-        }
+        self.tab_index = tab_index;
       }
     }
   }
@@ -1655,7 +1636,6 @@ impl App {
     };
 
     match app_window {
-      AppWindow::History => self.render_history(area, buf),
       AppWindow::Home    => self.render_home(area, buf),
       AppWindow::Search  => self.render_search(area, buf),
       AppWindow::Track   => self.render_track(area, buf),
@@ -1716,11 +1696,12 @@ impl App {
       header_block.clone().render(header_area, buf);
     }
 
-    match self.search_type {
-      SearchType::SearchTrack    => Self::render_search_tracks(self, main_area, buf),
-      SearchType::SearchArtist   => Self::render_search_artists(self, main_area, buf),
-      SearchType::SearchAlbum    => Self::render_search_albums(self, main_area, buf),
-      SearchType::SearchPlaylist => Self::render_search_playlists(self, main_area, buf),
+    match self.tab_index {
+      0 => Self::render_search_tracks(self, main_area, buf),
+      1 => Self::render_search_artists(self, main_area, buf),
+      2 => Self::render_search_albums(self, main_area, buf),
+      3 => Self::render_search_playlists(self, main_area, buf),
+      _ => {},
     }
     
     // If focus is the header, render header border on top
@@ -2062,12 +2043,14 @@ impl App {
       self.search.playlists.items
         .iter()
         .enumerate()
-        .map(|(index, playlist)| {
-          Row::new([
-            Cell::from(format!("{:>2}", index + 1)),
-            Cell::from(playlist.name.as_str()),
-          ])
-        },
+        .filter_map(|(index, playlist)| {
+          let playlist = playlist.as_ref()?;
+
+          Some(Row::new([
+              Cell::from(format!("{:>2}", index + 1)),
+              Cell::from(playlist.name.as_str()),
+          ]))
+        }
       )
         .collect::<Vec<_>>()
     } else {
@@ -2116,63 +2099,205 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
+    let is_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::Home,
+      Err(_) => return,
+    };
+
+    let (block_color, header_color, border_type) = if is_focus {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let [header_area, main_area] = Layout::vertical([
+      Constraint::Length(5),
+      Constraint::Min(1),
+    ])
+      .spacing(Spacing::Overlap(1))
+      .areas(area);
+
+    let header_block = Block::bordered()
+      .title(
+        Line::from(format!(" Home ").bold())
+        .left_aligned(),
+      )
+      .merge_borders(MergeStrategy::Exact)
+      .border_type(border_type)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
+
+    let inner_area = header_block.inner(header_area);
+
+    Paragraph::new(
+      Line::from(format!("{}", self.user.display_name.to_string()))
+    )
+      .style(Style::default()
+        .fg(Color::White)
+      )
+      .centered()
+      .render(inner_area, buf);
+
+    // If focus is the main area, render header border on bottom
+    if !is_focus {
+      header_block.clone().render(header_area, buf);
+    }
+
+    match self.tab_index {
+      0 => Self::render_home_history(self, main_area, buf),
+      1 => Self::render_home_playlists(self, main_area, buf),
+      _ => {},
+    }
+    
+    // If focus is the header, render header border on top
+    if is_focus {
+      header_block.clone().render(header_area, buf);
+    }
+
+    let rect = Rect {
+      x: header_area.x,
+      y: header_area.y + header_area.height - 1,
+      width: header_area.width,
+      height: 1,
+    };
+
+    Self::render_home_tabs(self, rect, buf);
+  }
+
+  fn render_home_tabs(
+    &mut self,
+    rect: Rect,
+    buf: &mut Buffer,
+  ) {
+    const TABS: [(AppFocus, &str); 2] = [
+      (AppFocus::HomeHistory,   "History"),
+      (AppFocus::HomePlaylists, "Playlist"),
+    ];
+
     let app_focus = match self.focus.lock() {
       Ok(app_focus) => *app_focus,
       Err(_) => return,
     };
 
-    let (color, border_type) = if app_focus == AppFocus::Home {
-      (Color::Green, BorderType::Thick)
-    } else {
-      (Color::White, BorderType::Plain)
-    };
+    let selected = TABS.iter().position(|(focus, _)| *focus == app_focus);
 
-    let block = Self::panel(" Home ", color, border_type);
-    block.clone().render(area, buf);
+    let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
+      + (TABS.len() as u16 - 1) * 2 + 2;
 
-    let inner = block.inner(area);
-
-    let [title_area, list_area] = Layout::vertical([
-      Constraint::Length(1),
-      Constraint::Min(1),
+    let centered = Layout::horizontal([
+      Constraint::Fill(1),
+      Constraint::Length(width),
+      Constraint::Fill(1),
     ])
-      .areas(inner);
+      .split(rect);
 
-    Paragraph::new(Line::from(self.user.display_name.as_str()))
-      .centered()
-      .wrap(Wrap { trim: true })
-      .render(title_area, buf);
+    // Creates tabs from every string TABS[i].1
+    let strings: [&_; TABS.len()] = std::array::from_fn(|i| TABS[i].1);
 
-    let items = ["Playlists", "History"];
-
-    for (index, item) in items.iter().enumerate() {
-      // Stop rendering items outside the available area.
-      if index >= list_area.height as usize {
-        break;
-      }
-
-      let item_area = Rect {
-        x: list_area.x,
-        y: list_area.y + index as u16,
-        width: list_area.width,
-        height: 1,
-      };
-
-      let style = if index == self.list_index {
+    Tabs::new(strings)
+      .select(selected)
+      .style(
         Style::default()
-          .bg(Color::Gray)
-          .fg(Color::Black)
-      } else {
-        Style::default().fg(Color::White)
-      };
-
-      Paragraph::new(*item)
-        .style(style)
-        .render(item_area, buf);
-    }
+        .fg(Color::Gray)
+      )
+      .highlight_style(
+        Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD),
+      )
+      .divider("")
+      .render(centered[1], buf);
   }
 
-  fn render_history(
+  fn render_home_playlists(
+    &mut self,
+    area: Rect,
+    buf: &mut Buffer,
+  ) {
+    let is_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::HomePlaylists,
+      Err(_) => return,
+    };
+
+    let (block_color, header_color, border_type) = if is_focus {
+      (Color::Green, Color::Yellow, BorderType::Thick)
+    } else {
+      (Color::White, Color::White, BorderType::Plain)
+    };
+
+    let header = Row::new([
+      Cell::from(" #"),
+      Cell::from("NAME"),
+      Cell::from("ARTISTS"),
+    ])
+      .style(
+        Style::default()
+        .fg(header_color),
+      )
+      .bold();
+
+    let rows = if !self.user_playlists.items.is_empty() {
+      self.user_playlists.items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, playlist)| {
+          let playlist = playlist.as_ref()?;
+
+          Some(Row::new([
+              Cell::from(format!("{:>2}", index + 1)),
+              Cell::from(playlist.name.as_str()),
+              Cell::from(playlist.owner.display_name.as_str()),
+          ]))
+        }
+      )
+        .collect::<Vec<_>>()
+    } else {
+      vec![
+        Row::new([
+          Cell::from(""),
+          Cell::from("No tracks"),
+          Cell::from(""),
+        ])
+      ]
+    };
+
+    let block = Block::bordered()
+      .border_type(border_type)
+      .merge_borders(MergeStrategy::Exact)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
+
+    let table = Table::new(rows, [
+      Constraint::Length(2),
+      Constraint::Min(10),
+      Constraint::Fill(1),
+    ])
+      .header(header)
+      .column_spacing(2)
+      .style(
+        Style::default()
+        .fg(Color::White)
+      )
+      .row_highlight_style(
+        Style::default()
+        .bg(Color::Gray)
+        .fg(Color::Black)
+      )
+      .block(block);
+
+    StatefulWidget::render(
+      table,
+      area,
+      buf,
+      &mut self.table_state,
+    );
+  }
+
+  fn render_home_history(
     &mut self,
     area: Rect,
     buf: &mut Buffer,
@@ -2182,13 +2307,19 @@ impl App {
       Err(_) => return,
     };
 
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::History {
+    let (block_color, header_color, border_type) = if app_focus == AppFocus::HomeHistory {
       (Color::Green, Color::Yellow, BorderType::Thick)
     } else {
       (Color::White, Color::White, BorderType::Plain)
     };
 
-    let block = Self::panel(" History ", block_color, border_type);
+    let block = Block::bordered()
+      .border_type(border_type)
+      .merge_borders(MergeStrategy::Exact)
+      .border_style(
+        Style::default()
+        .fg(block_color),
+      );
 
     let header = Row::new([
       Cell::from(" #"),
@@ -2297,7 +2428,7 @@ impl App {
         )
       }
 
-      AppFocus::History => {
+      AppFocus::HomeHistory => {
         Line::from(
           "↵ Play | h/← Queue | ↑/k Up | ↓/j Down | Home/End Jump",
         )
@@ -2595,10 +2726,6 @@ fn home_key_action(
   key: KeyEvent,
 ) -> Action {
   match key.code {
-    KeyCode::Enter => {
-      Action::HomeEnter
-    }
-
     KeyCode::Tab | KeyCode::Right | KeyCode::Char('j') => {
       Action::ListNext { max: 2 }
     }
@@ -2639,7 +2766,27 @@ fn queue_key_action(
   }
 }
 
-fn history_key_action(
+fn home_playlists_key_action(
+  key: KeyEvent,
+) -> Action {
+  match key.code {
+    KeyCode::Down | KeyCode::Char('j') => {
+      Action::TableNext
+    }
+
+    KeyCode::Up | KeyCode::Char('k') => {
+      Action::TablePrevious
+    }
+
+    KeyCode::BackTab => {
+      Action::SetFocusAndTabIndex { focus: AppFocus::HomeHistory, tab_index: 0 }
+    }
+
+    _ => Action::Render,
+  }
+}
+
+fn home_history_key_action(
   key: KeyEvent,
 ) -> Action {
   match key.code {
@@ -2657,6 +2804,10 @@ fn history_key_action(
 
     KeyCode::Up | KeyCode::Char('k') => {
       Action::TablePrevious
+    }
+
+    KeyCode::Tab => {
+      Action::SetFocusAndTabIndex { focus: AppFocus::HomePlaylists, tab_index: 1 }
     }
 
     _ => Action::Render,
@@ -2704,7 +2855,7 @@ fn search_track_key_action(
     }
 
     KeyCode::Tab => {
-      Action::SetSearchType { search_type: SearchType::SearchArtist }
+      Action::SetFocusAndTabIndex { focus: AppFocus::SearchArtist, tab_index: 1 }
     }
 
     _ => Action::Render,
@@ -2728,11 +2879,11 @@ fn search_artist_key_action(
     }
 
     KeyCode::Tab => {
-      Action::SetSearchType { search_type: SearchType::SearchAlbum }
+      Action::SetFocusAndTabIndex { focus: AppFocus::SearchAlbum, tab_index: 2 }
     }
 
     KeyCode::BackTab => {
-      Action::SetSearchType { search_type: SearchType::SearchTrack }
+      Action::SetFocusAndTabIndex { focus: AppFocus::SearchTrack, tab_index: 0 }
     }
 
     _ => Action::Render,
@@ -2752,11 +2903,11 @@ fn search_album_key_action(
     }
 
     KeyCode::Tab => {
-      Action::SetSearchType { search_type: SearchType::SearchPlaylist }
+      Action::SetFocusAndTabIndex { focus: AppFocus::SearchPlaylist, tab_index: 3 }
     }
 
     KeyCode::BackTab => {
-      Action::SetSearchType { search_type: SearchType::SearchArtist }
+      Action::SetFocusAndTabIndex { focus: AppFocus::SearchArtist, tab_index: 1 }
     }
 
     _ => Action::Render,
@@ -2776,7 +2927,7 @@ fn search_playlist_key_action(
     }
 
     KeyCode::BackTab => {
-      Action::SetSearchType { search_type: SearchType::SearchAlbum }
+      Action::SetFocusAndTabIndex { focus: AppFocus::SearchAlbum, tab_index: 2 }
     }
 
     _ => Action::Render,
@@ -2834,8 +2985,16 @@ fn key_to_action(
       queue_key_action(key)
     }
 
-    AppFocus::History => {
-      history_key_action(key)
+    AppFocus::Home => {
+      home_key_action(key)
+    }
+
+    AppFocus::HomeHistory => {
+      home_history_key_action(key)
+    }
+
+    AppFocus::HomePlaylists => {
+      home_playlists_key_action(key)
     }
 
     AppFocus::Search => {
@@ -2856,10 +3015,6 @@ fn key_to_action(
 
     AppFocus::SearchArtist => {
       search_artist_key_action(key)
-    }
-
-    AppFocus::Home => {
-      home_key_action(key)
     }
 
     _ => Action::Render

@@ -469,8 +469,7 @@ pub struct Albums {
 pub struct Playlists {
   pub limit: u32,
   pub total: u32,
-  #[serde(skip)]
-  pub items: Vec<Playlist>,
+  pub items: Vec<Option<Playlist>>,
 }
 
 #[derive(Default, Debug, Clone, Deserialize)]
@@ -521,6 +520,14 @@ pub struct Playlist {
   pub name:   String,
   pub public: bool,
   pub items:  PlaylistItems,
+  pub owner:  Owner,
+}
+
+// Spotify Owner
+#[derive(Default, Debug, Clone, Deserialize)]
+pub struct Owner {
+  pub display_name: String,
+  pub uri:          String,
 }
 
 // Sub-struct for getting items in playlist
