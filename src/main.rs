@@ -286,6 +286,7 @@ enum Action {
   SetSearchType { search_type: SearchType },
 
   Error(String),
+  Message(String),
 }
 
 // ============================================================================
@@ -326,6 +327,7 @@ struct App {
   action_tx:     UnboundedSender<Action>,
 
   error_list:    Arc<Mutex<VecDeque<(u64, String)>>>,
+  message_list:  Arc<Mutex<VecDeque<(u64, String)>>>,
   exit:          bool,
 }
 
@@ -369,7 +371,8 @@ impl App {
 
       action_tx,
 
-      error_list: Arc::new(Mutex::new(VecDeque::new())),
+      error_list:   Arc::new(Mutex::new(VecDeque::new())),
+      message_list: Arc::new(Mutex::new(VecDeque::new())),
       exit:       false,
 
       last_player_update: std::time::Instant::now(),
@@ -739,6 +742,10 @@ impl App {
         self.spawn_error(error);
       }
 
+      Action::Message(message) => {
+        self.spawn_message(message);
+      }
+
       Action::SetWindow { window } => {
         self.set_window(window);
       }
@@ -798,6 +805,20 @@ impl App {
       sleep(Duration::from_secs(5)).await;
 
       error_list.lock().unwrap().retain(|(entry_id, _)| *entry_id != id);
+    });
+  }
+
+  fn spawn_message(&self, message: String) {
+    let message_list = Arc::clone(&self.message_list);
+    
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+
+    tokio::spawn(async move {
+      message_list.lock().unwrap().push_back((id, message));
+
+      sleep(Duration::from_secs(10)).await;
+
+      message_list.lock().unwrap().retain(|(entry_id, _)| *entry_id != id);
     });
   }
 
@@ -1097,7 +1118,7 @@ impl App {
 
     // Create Action::Message
     let _ = tx.send(
-      Action::Error(format!("Playing: {}\nTrack Uri: {}\nAlbum Uri: {}", track.name.to_string(), track.uri.to_string(), track.album.name.to_string()))
+      Action::Message(format!("Playing: {}\nTrack Uri: {}\nAlbum Uri: {}", track.name.to_string(), track.uri.to_string(), track.album.name.to_string()))
     );
 
     tokio::spawn(async move {
@@ -2323,21 +2344,43 @@ impl App {
       .render(area, buf);
   }
 
-  fn render_error(
+  fn render_error_and_message(
     &self,
     area: Rect,
     buf: &mut Buffer,
   ) {
-
     let error_list = match self.error_list.lock() {
       Ok(error_list) => error_list,
       Err(_) => return,
     };
 
+    let message_list = match self.message_list.lock() {
+      Ok(message_list) => message_list,
+      Err(_) => return,
+    };
+
+    #[derive(PartialEq)]
+    enum InfoType {
+      Error,
+      Message,
+    }
+
+    let mut info_list: Vec<(InfoType, String)> = Vec::new();
+
+    info_list.extend(
+      error_list.iter().map(|(_, s)| (InfoType::Error, s.clone()))
+    );
+
+    info_list.extend(
+      message_list.iter().map(|(_, s)| (InfoType::Message, s.clone()))
+    );
+
     let mut y = area.y;
 
-    for (index, (_, error)) in error_list.iter().enumerate() {
-      let text_width = error.len() as u16;
+    for (index, (info_type, text)) in info_list.iter().enumerate() {
+      let is_error = *info_type == InfoType::Error;
+
+      let text_width = text.len() as u16;
 
       // +2 for left/right borders +2 padding
       let width = (text_width + 4).min(area.width);
@@ -2349,7 +2392,8 @@ impl App {
       let lines = text_width.div_ceil(content_width);
 
       // +3 for top/bottom borders + "Error"
-      let height = (lines + 3).min(area.height.saturating_sub(y - area.y));
+      let height_add = if is_error { 3 } else { 2 };
+      let height = (lines + height_add).min(area.height.saturating_sub(y - area.y));
 
       let rect = Rect {
         x: area.x + area.width - width,
@@ -2361,30 +2405,32 @@ impl App {
       // Clears rect from any previously rendered text
       Clear.render(rect, buf);
 
-      let mut block = Block::bordered()
-        .border_type(
-          BorderType::Plain
-        )
+      let mut block = if is_error {
+        Block::bordered()
+        .border_type(BorderType::Plain)
         .border_style(
           Style::default()
           .fg(Color::Red)
-        );
+        )
+      } else {
+        Block::bordered()
+        .border_type(BorderType::Plain)
+        .border_style(
+          Style::default()
+          .fg(Color::White)
+        )
+      };
 
-
-      if index == 0 {
-        block = block.title(
-          Line::from(vec![
-            Span::styled(" c",    Style::default().fg(Color::Blue)),
-            Span::styled("lose ", Style::default().fg(Color::White)),
-          ])
-          .right_aligned(),
-        );
+      if is_error {
+        Paragraph::new(Text::from(vec![
+          Line::from("Error".to_string().red()),
+          Line::from(text.as_str().bold().white()),
+        ]))
+      } else {
+        Paragraph::new(Text::from(vec![
+          Line::from(text.as_str().bold().white()),
+        ]))
       }
-
-      Paragraph::new(Text::from(vec![
-        Line::from("Error".to_string().red()),
-        Line::from(error.as_str().bold().white()),
-      ]))
         .centered()
         .wrap(Wrap { trim: false })
         .block(block)
@@ -2453,7 +2499,7 @@ impl Widget for &mut App {
       ])
       .areas(right_area);
 
-    let [ _, error_area ] = Layout::horizontal([
+    let [ _, info_area ] = Layout::horizontal([
         Constraint::Percentage(40),
         Constraint::Percentage(60),
       ])
@@ -2484,8 +2530,8 @@ impl Widget for &mut App {
       buf,
     );
 
-    self.render_error(
-      error_area,
+    self.render_error_and_message(
+      info_area,
       buf,
     );
   }
@@ -2521,10 +2567,6 @@ fn player_key_action(
   match key.code {
     KeyCode::Enter => {
       Action::Refresh
-    }
-
-    KeyCode::Char('e') => {
-      Action::Error(format!("Test Error"))
     }
 
     KeyCode::Char(' ') => {
@@ -2864,13 +2906,8 @@ fn spawn_event_handler(
 
         Ok(Err(error)) => {
           let _ = tx.send(
-            Action::Error(
-              format!(
-                "Terminal event error: {error}"
-              ),
-            ),
+            Action::Error(format!("Terminal event error: {error}")),
           );
-
           return;
         }
 
@@ -2878,7 +2915,6 @@ fn spawn_event_handler(
           let _ = tx.send(
             Action::Error(format!("Event task error: {error}")),
           );
-
           return;
         }
       };
