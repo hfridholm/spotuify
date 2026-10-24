@@ -18,13 +18,6 @@ use std::{
   collections::VecDeque,
 };
 
-use base64::{
-  engine::general_purpose::URL_SAFE_NO_PAD,
-  Engine,
-};
-
-use chrono::{DateTime, Utc};
-
 use crossterm::event::{
   self,
   Event,
@@ -32,11 +25,6 @@ use crossterm::event::{
   KeyEvent,
   KeyEventKind,
   KeyModifiers,
-};
-
-use rand::{
-  RngExt,
-  distr::Alphanumeric,
 };
 
 use ratatui::{
@@ -87,22 +75,7 @@ use ratatui::{
   Frame,
 };
 
-use reqwest::{
-  Client,
-  header::CONTENT_LENGTH,
-};
-
 use serde::Deserialize;
-
-use sha2::{
-  Digest,
-  Sha256,
-};
-
-use tiny_http::{
-  Response,
-  Server,
-};
 
 use tokio::{
   sync::mpsc::{
@@ -114,443 +87,27 @@ use tokio::{
   time::{sleep, Duration},
 };
 
-use url::Url;
+mod api;
+use crate::api::{
+  SpotifyApi,
+  User,
+  Player,
+  History,
+  Queue,
+  Search,
+  Tracks,
+  Track,
+  Artists,
+  Artist,
+  Albums,
+  Album,
+  Playlists,
+  Playlist,
+};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
-
-const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
-
-
-// ============================================================================
-// Spotify OAuth
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-struct SpotifyToken {
-  access_token:  String,
-  #[allow(dead_code)]
-  scope:         String,
-  #[allow(dead_code)]
-  expires_in:    u64,
-  refresh_token: Option<String>,
-}
-
-fn generate_code_verifier() -> String {
-  rand::rng()
-    .sample_iter(Alphanumeric)
-    .take(64)
-    .map(char::from)
-    .collect()
-}
-
-fn generate_code_challenge(verifier: &str) -> String {
-  let hash = Sha256::digest(verifier.as_bytes());
-  URL_SAFE_NO_PAD.encode(hash)
-}
-
-fn build_authorization_url(
-  client_id: &str,
-  challenge: &str,
-) -> String {
-  let mut url = Url::parse(
-    "https://accounts.spotify.com/authorize",
-  )
-    .expect("Invalid Spotify authorization URL");
-
-  url.query_pairs_mut()
-    .append_pair("response_type", "code")
-    .append_pair("client_id", client_id)
-    .append_pair(
-      "scope",
-      "user-read-playback-state user-modify-playback-state user-read-recently-played",
-    )
-    .append_pair("code_challenge_method", "S256")
-    .append_pair("code_challenge", challenge)
-    .append_pair("redirect_uri", REDIRECT_URI);
-
-  url.to_string()
-}
-
-fn wait_for_callback() -> Result<String, Error> {
-  let server = Server::http("127.0.0.1:8888")?;
-
-  let request = server.recv()?;
-
-  let url = Url::parse(
-    &format!("http://127.0.0.1{}", request.url())
-  )?;
-
-  let code = url
-    .query_pairs()
-    .find(|(key, _)| key == "code")
-    .map(|(_, value)| value.to_string());
-
-  let response = Response::from_string(
-    "Spotify authorization complete. You can close this browser window.",
-  );
-
-  request.respond(response)?;
-
-  code.ok_or_else(|| {
-    "Spotify did not return an authorization code".into()
-  })
-}
-
-fn exchange_code_blocking(
-  client: &reqwest::blocking::Client,
-  client_id: &str,
-  code: &str,
-  verifier: &str,
-) -> Result<SpotifyToken, Error> {
-  let token = client
-    .post("https://accounts.spotify.com/api/token")
-    .form(&[
-      ("grant_type", "authorization_code"),
-      ("code", code),
-      ("redirect_uri", REDIRECT_URI),
-      ("client_id", client_id),
-      ("code_verifier", verifier),
-    ])
-    .send()?
-    .error_for_status()?
-    .json::<SpotifyToken>()?;
-
-  Ok(token)
-}
-
-fn refresh_access_token_blocking(
-  client: &reqwest::blocking::Client,
-  client_id: &str,
-  refresh_token: &str,
-) -> Result<SpotifyToken, Error> {
-  let token = client
-    .post("https://accounts.spotify.com/api/token")
-    .form(&[
-      ("grant_type", "refresh_token"),
-      ("refresh_token", refresh_token),
-      ("client_id", client_id),
-    ])
-    .send()?
-    .error_for_status()?
-    .json::<SpotifyToken>()?;
-
-  Ok(token)
-}
-
-fn get_access_token_blocking(
-  client_id: &str,
-) -> Result<String, Error> {
-  let client = reqwest::blocking::Client::new();
-
-  let token_path = "refresh_token";
-
-  // Try existing refresh token first.
-  if let Ok(refresh_token) = std::fs::read_to_string(token_path) {
-    let token = refresh_access_token_blocking(
-      &client,
-      client_id,
-      refresh_token.trim(),
-    )?;
-
-    if let Some(new_refresh_token) = &token.refresh_token {
-      std::fs::write(
-        token_path,
-        new_refresh_token,
-      )?;
-    }
-
-    return Ok(token.access_token);
-  }
-
-  // No refresh token: perform initial authorization.
-
-  let verifier = generate_code_verifier();
-  let challenge = generate_code_challenge(&verifier);
-
-  let auth_url = build_authorization_url(
-    client_id,
-    &challenge,
-  );
-
-  // Start the callback server before opening the browser.
-  //
-  // wait_for_callback() is blocking, but this entire OAuth
-  // operation is called from spawn_blocking by App::new().
-  if let Err(error) = open::that(&auth_url) {
-    eprintln!(
-      "Could not open browser automatically: {error}"
-    );
-
-    eprintln!(
-      "Open this URL manually:\n{auth_url}"
-    );
-  }
-
-  let code = wait_for_callback()?;
-
-  let token = exchange_code_blocking(
-    &client,
-    client_id,
-    &code,
-    &verifier,
-  )?;
-
-  let refresh_token = token
-    .refresh_token
-    .ok_or("Spotify did not return a refresh token")?;
-
-  std::fs::write(
-    token_path,
-    &refresh_token,
-  )?;
-
-  Ok(token.access_token)
-}
-
-// ============================================================================
-// Spotify data types
-// ============================================================================
-
-#[derive(Default, Debug, Clone)]
-struct SpotifyState {
-  user:    User,
-  player:  Player,
-  queue:   Option<Queue>,
-  history: Option<History>,
-}
-
-#[derive(Debug, Clone)]
-struct SpotifyApi {
-  client:       Client,
-  access_token: Arc<str>,
-}
-
-impl SpotifyApi {
-  async fn new() -> Result<Self, Error> {
-    let client_id = env::var("CLIENT_ID")?;
-
-    let access_token = tokio::task::spawn_blocking(move || {
-      get_access_token_blocking(&client_id)
-    }).await??;
-
-    Ok(Self {
-      client:       Client::new(),
-      access_token: Arc::from(access_token),
-    })
-  }
-
-  async fn fetch_state(
-    &self,
-  ) -> Result<SpotifyState, Error> {
-    /*
-    let user = User::get(
-      &self.client,
-      &self.access_token,
-    ).await?;
-    */
-
-    let player = Player::get(
-      &self.client,
-      &self.access_token,
-    ).await?;
-
-    let queue = player.get_queue(
-      &self.client,
-      &self.access_token,
-    ).await?;
-
-    /*
-    let history = player.get_history(
-      &self.client,
-      &self.access_token,
-    ).await?;
-    */
-
-    Ok(SpotifyState {
-      user:    User::default(),
-      player,
-      queue:   Some(queue),
-      history: None,
-    })
-  }
-
-  async fn refresh(
-    &self,
-  ) -> Result<SpotifyState, Error> {
-    self.fetch_state().await
-  }
-
-  async fn pause(
-    &self,
-    player: &Player,
-  ) -> Result<(), Error> {
-    player.pause(
-      &self.client,
-      &self.access_token,
-    ).await
-  }
-
-  async fn resume(
-    &self,
-    player: &Player,
-  ) -> Result<(), Error> {
-    player.resume(
-      &self.client,
-      &self.access_token,
-    ).await
-  }
-
-  async fn next(
-    &self,
-    player: &Player,
-  ) -> Result<(), Error> {
-    player.next(
-      &self.client,
-      &self.access_token,
-    ).await
-  }
-
-  async fn previous(
-    &self,
-    player: &Player,
-  ) -> Result<(), Error> {
-    player.prev(
-      &self.client,
-      &self.access_token,
-    ).await
-  }
-
-  async fn volume(
-    &self,
-    player: &Player,
-    volume: u8,
-  ) -> Result<(), Error> {
-    player.volume(
-      &self.client,
-      &self.access_token,
-      volume,
-    ).await
-  }
-
-  async fn shuffle(
-    &self,
-    player: &Player,
-  ) -> Result<(), Error> {
-    player.toggle_shuffle(
-      &self.client,
-      &self.access_token,
-    ).await
-  }
-
-  async fn repeat(
-    &self,
-    player: &Player,
-  ) -> Result<(), Error> {
-    player.toggle_repeat(
-      &self.client,
-      &self.access_token,
-    ).await
-  }
-
-  async fn play(
-    &self,
-    player: &Player,
-    uri: &str,
-    context_uri: &str,
-  ) -> Result<(), Error> {
-    player.play(
-      &self.client,
-      &self.access_token,
-      uri,
-      context_uri,
-    ).await
-  }
-
-  async fn queue(
-    &self,
-    player: &Player,
-    uri: &str,
-  ) -> Result<(), Error> {
-    player.queue(
-      &self.client,
-      &self.access_token,
-      uri,
-    ).await
-  }
-}
-
-// ============================================================================
-// Spotify models
-// ============================================================================
-
-#[derive(Default, Debug, Clone, Deserialize)]
-struct User {
-  account_id:   String,
-  display_name: String,
-  uri:          String,
-}
-
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Player {
-  device:        Option<Device>,
-  progress_ms:   u32,
-  context:       Option<Context>,
-  item:          Option<Track>,
-  is_playing:    bool,
-  repeat_state:  String,
-  shuffle_state: bool,
-}
-
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Device {
-  id:             String,
-  name:           String,
-  volume_percent: u8,
-  is_active:      bool,
-}
-
-#[derive(Default, Debug, Clone, Deserialize)]
-struct History {
-  items: Vec<PlayedTrack>,
-}
-
-#[derive(Default, Debug, Clone, Deserialize)]
-struct PlayedTrack {
-  track:     Option<Track>,
-  played_at: String,
-}
-
-impl PlayedTrack {
-  fn get_elapsed(&self) -> u32 {
-    let then = match DateTime::parse_from_rfc3339(&self.played_at) {
-      Ok(value) => value.with_timezone(&Utc),
-      Err(_) => return 0,
-    };
-
-    let now = Utc::now();
-
-    let elapsed = now.signed_duration_since(then);
-
-    elapsed
-      .num_milliseconds()
-      .max(0) as u32
-  }
-}
-
-// Search result
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Search {
-  tracks:    Tracks,
-  artists:   Artists,
-  albums:    Albums,
-  playlists: Playlists,
-  #[serde(skip)]
-  search_type: SearchType,
-  #[serde(skip)]
-  buffer: String,
-}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 enum SearchType {
@@ -569,488 +126,6 @@ impl SearchType {
       Self::SearchAlbum    => AppFocus::SearchAlbum,
       Self::SearchPlaylist => AppFocus::SearchPlaylist,
     }
-  }
-}
-
-// Spotify: Tracks
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Tracks {
-  limit: u32,
-  total: u32,
-  items: Vec<Track>,
-}
-
-// Spotify: Artists
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Artists {
-  limit: u32,
-  total: u32,
-  items: Vec<Artist>,
-}
-
-// Spotify: Albums
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Albums {
-  limit: u32,
-  total: u32,
-  items: Vec<Album>,
-}
-
-// Spotify: Playlists
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Playlists {
-  limit: u32,
-  total: u32,
-  #[serde(skip)]
-  items: Vec<Playlist>,
-}
-
-impl Search {
-  async fn get(
-    client: &Client,
-    access_token: &str,
-    query: &str,
-  ) -> Result<Self, Error> {
-    let response = client
-      .get("https://api.spotify.com/v1/search")
-      .query(&[
-        ("q", query),
-        ("type", "album,artist,track,playlist"),
-        ("limit", "5"),
-      ])
-      .bearer_auth(access_token)
-      .send()
-      .await?
-      .error_for_status()?;
-
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "Nothing is currently playing".into()
-      );
-    }
-
-    Ok(
-      response
-      .error_for_status()?
-      .json::<Search>()
-      .await?,
-    )
-  }
-}
-
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Queue {
-  currently_playing: Option<Track>,
-  queue:             Vec<Track>,
-}
-
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Context {
-  uri: String,
-}
-
-// Spotify: TrackObject
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Track {
-  id:          String,
-  name:        String,
-  uri:         String,
-  duration_ms: u32,
-  artists:     Vec<Artist>,
-}
-
-// Spotify ArtistObject
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Artist {
-  id:   String,
-  name: String,
-}
-
-// Spotify SimplifiedAlbumObject
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Album {
-  album_type:   String,
-  total_tracks: u32,
-  release_date: String,
-  id:           String,
-  name:         String,
-  artists:      Vec<Artist>,
-}
-
-// Spotify SimplifiedPlaylistObject
-#[derive(Default, Debug, Clone, Deserialize)]
-struct Playlist {
-  id:     String,
-  name:   String,
-  public: bool,
-  items:  PlaylistItems,
-}
-
-// Sub-struct for getting items in playlist
-#[derive(Default, Debug, Clone, Deserialize)]
-struct PlaylistItems {
-  href:  String,
-  total: u32,
-}
-
-// ============================================================================
-// Spotify API implementation
-// ============================================================================
-
-impl User {
-  async fn get(
-    client: &Client,
-    access_token: &str,
-  ) -> Result<Self, Error> {
-    let response = client
-      .get("https://api.spotify.com/v1/me")
-      .bearer_auth(access_token)
-      .send()
-      .await?;
-
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "No user".into()
-      );
-    }
-
-    Ok(
-      response
-      .error_for_status()?
-      .json::<User>()
-      .await?,
-    )
-  }
-}
-
-impl Player {
-  async fn get(
-    client: &Client,
-    access_token: &str,
-  ) -> Result<Self, Error> {
-    let response = client
-      .get("https://api.spotify.com/v1/me/player")
-      .bearer_auth(access_token)
-      .send()
-      .await?;
-
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "Nothing is currently playing".into()
-      );
-    }
-
-    Ok(
-      response
-      .error_for_status()?
-      .json::<Player>()
-      .await?,
-    )
-  }
-
-  fn get_duration(&self) -> Result<u32, Error> {
-    self.item
-      .as_ref()
-      .map(|track| track.duration_ms)
-      .ok_or_else(|| "No track".into())
-  }
-
-  fn get_remaining(&self) -> Result<u32, Error> {
-    let duration_ms = self.get_duration()?;
-
-    Ok(duration_ms.saturating_sub(self.progress_ms))
-  }
-
-  async fn get_queue(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<Queue, Error> {
-    let response = client
-      .get("https://api.spotify.com/v1/me/player/queue")
-      .bearer_auth(access_token)
-      .send()
-      .await?;
-
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err("Queue is empty".into());
-    }
-
-    Ok(
-      response
-      .error_for_status()?
-      .json::<Queue>()
-      .await?,
-    )
-  }
-
-  async fn get_history(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<History, Error> {
-    let response = client
-      .get("https://api.spotify.com/v1/me/player/recently-played")
-      .bearer_auth(access_token)
-      .send()
-      .await?;
-
-    if response.status() == reqwest::StatusCode::NO_CONTENT {
-      return Err(
-        "No recently played tracks".into()
-      );
-    }
-
-    Ok(
-      response
-      .error_for_status()?
-      .json::<History>()
-      .await?,
-    )
-  }
-
-  async fn volume(
-    &self,
-    client: &Client,
-    access_token: &str,
-    volume_percent: u8,
-  ) -> Result<(), Error> {
-    let device = self.device()?;
-
-    client
-      .put("https://api.spotify.com/v1/me/player/volume")
-      .query(&[
-        ("device_id", &device.id.as_str()),
-        ("volume_percent", &volume_percent.to_string().as_str()),
-      ])
-      .bearer_auth(access_token)
-      .header(CONTENT_LENGTH, "0")
-      .send()
-      .await?
-      .error_for_status()?;
-
-    Ok(())
-  }
-
-  async fn queue(
-    &self,
-    client: &Client,
-    access_token: &str,
-    uri: &str,
-  ) -> Result<(), Error> {
-    let device = self.device()?;
-
-    client
-      .post("https://api.spotify.com/v1/me/player/queue")
-      .query(&[
-        ("device_id", &device.id.as_str()),
-        ("uri", &uri),
-      ])
-      .bearer_auth(access_token)
-      .send()
-      .await?
-      .error_for_status()?;
-
-    Ok(())
-  }
-
-  async fn play(
-    &self,
-    client: &Client,
-    access_token: &str,
-    uri: &str,
-    context_uri: &str,
-  ) -> Result<(), Error> {
-    let device = self.device()?;
-
-    let body = if context_uri.is_empty() {
-      serde_json::json!({
-        "uris": [uri],
-      })
-    } else {
-      serde_json::json!({
-        "context_uri": context_uri,
-        "offset": { "uri": uri },
-      })
-    };
-
-    client
-      .put(
-        "https://api.spotify.com/v1/me/player/play",
-      )
-      .query(&[
-        ("device_id", &device.id.as_str()),
-      ])
-      .json(&body)
-      .bearer_auth(access_token)
-      .send()
-      .await?
-      .error_for_status()?;
-
-    Ok(())
-  }
-
-  async fn resume(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    self.put(
-      client,
-      access_token,
-      "https://api.spotify.com/v1/me/player/play",
-    ).await
-  }
-
-  async fn pause(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    self.put(
-      client,
-      access_token,
-      "https://api.spotify.com/v1/me/player/pause",
-    ).await
-  }
-
-  async fn next(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    self.post(
-      client,
-      access_token,
-      "https://api.spotify.com/v1/me/player/next",
-    ).await
-  }
-
-  async fn prev(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    self.post(
-      client,
-      access_token,
-      "https://api.spotify.com/v1/me/player/previous",
-    ).await
-  }
-
-  async fn put(
-    &self,
-    client: &Client,
-    access_token: &str,
-    url: &str,
-  ) -> Result<(), Error> {
-    let device = self.device()?;
-
-    client
-      .put(url)
-      .query(&[
-        ("device_id", &device.id.as_str()),
-      ])
-      .bearer_auth(access_token)
-      .header(CONTENT_LENGTH, "0")
-      .send()
-      .await?
-      .error_for_status()?;
-
-    Ok(())
-  }
-
-  async fn post(
-    &self,
-    client: &Client,
-    access_token: &str,
-    url: &str,
-  ) -> Result<(), Error> {
-    let device = self.device()?;
-
-    client
-      .post(url)
-      .query(&[
-        ("device_id", &device.id.as_str()),
-      ])
-      .bearer_auth(access_token)
-      .header(CONTENT_LENGTH, "0")
-      .send()
-      .await?
-      .error_for_status()?;
-
-    Ok(())
-  }
-
-  async fn toggle_shuffle(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    let device = self.device()?;
-
-    let next_state = !self.shuffle_state;
-
-    client
-      .put(
-        "https://api.spotify.com/v1/me/player/shuffle",
-      )
-      .query(&[
-        ("state", next_state.to_string()),
-        ("device_id", device.id.clone()),
-      ])
-      .bearer_auth(access_token)
-      .send()
-      .await?
-      .error_for_status()?;
-
-    Ok(())
-  }
-
-  async fn toggle_repeat(
-    &self,
-    client: &Client,
-    access_token: &str,
-  ) -> Result<(), Error> {
-    let device = self.device()?;
-
-    let states = [
-      "track",
-      "context",
-      "off",
-    ];
-
-    let index = states
-      .iter()
-      .position(|&state| {
-        state == self.repeat_state
-      })
-      .unwrap_or(0);
-
-    let next_state = states[(index + 1) % states.len()];
-
-    client
-      .put(
-        "https://api.spotify.com/v1/me/player/repeat",
-      )
-      .query(&[
-        ("state", next_state),
-        ("device_id", &device.id.clone()),
-      ])
-      .bearer_auth(access_token)
-      .send()
-      .await?
-      .error_for_status()?;
-
-    Ok(())
-  }
-
-  fn device(&self) -> Result<&Device, Error> {
-    self.device
-      .as_ref()
-      .ok_or_else(|| {
-        "No Spotify device found".into()
-      })
   }
 }
 
@@ -1197,15 +272,25 @@ enum Action {
     to_insert: char,
   },
   SearchDelete,
-  SearchUpdated {
-    search: Search,
-  },
-
   ShowSearchTrack,
   ShowSearchArtist,
 
+  /*
   SpotifyStateUpdated {
     state: SpotifyState,
+  },
+  PlayerUpdated {
+    player: Player,
+  },
+  HistoryUpdated {
+    history: History,
+  },
+  QueueUpdated {
+    queue: Queue,
+  },
+  */
+  SearchUpdated {
+    search: Search,
   },
 
   HomeEnter,
@@ -1231,12 +316,21 @@ enum Action {
 
 struct App {
   spotify:       SpotifyApi,
-  state:         SpotifyState, // Maybe unpack this
+  // Used to make the progress gauge move smoothly between
+  // Spotify API refreshes.
+  last_player_update: std::time::Instant,
 
   focus:         Arc<Mutex<AppFocus>>,
   window:        Arc<Mutex<AppWindow>>,
 
-  search: Search,
+  user:    User,
+  player:  Player,
+  queue:   Option<Queue>,
+  history: Option<History>,
+
+  search:        Search,
+  search_type:   SearchType,
+  search_buffer: String,
 
   track:    Option<Track>,
   artist:   Option<Artist>,
@@ -1255,26 +349,32 @@ struct App {
 
   error_list:    Arc<Mutex<VecDeque<(u64, String)>>>,
   exit:          bool,
-
-  // Used to make the progress gauge move smoothly between
-  // Spotify API refreshes.
-  last_player_update: std::time::Instant,
 }
 
 impl App {
   async fn new(
     action_tx: UnboundedSender<Action>,
   ) -> Result<Self, Error> {
+    // Maybe rename this to "api"
     let spotify = SpotifyApi::new().await?;
+
+    let player = Player::get(&spotify).await?;
+    let queue  = Queue::get(&spotify).await?;
 
     Ok(Self {
       spotify,
-      state: SpotifyState::default(),
 
       focus:  Arc::new(Mutex::new(AppFocus::Player)),
       window: Arc::new(Mutex::new(AppWindow::Home)),
 
-      search: Search::default(),
+      user:    User::default(),
+      player,
+      history: None, // Some(history),
+      queue:   Some(queue),
+
+      search:        Search::default(),
+      search_type:   SearchType::SearchTrack,
+      search_buffer: String::default(),
 
       track:    None,
       artist:   None,
@@ -1364,7 +464,7 @@ impl App {
       AppFocus::Search => {
         match action {
           Action::Down => {
-            match self.search.search_type {
+            match self.search_type {
               SearchType::SearchTrack    => AppFocus::SearchTrack,
               SearchType::SearchAlbum    => AppFocus::SearchAlbum,
               SearchType::SearchArtist   => AppFocus::SearchArtist,
@@ -1452,7 +552,7 @@ impl App {
       Action::Render => {}
 
       Action::Refresh => {
-        self.spawn_refresh();
+        // self.spawn_refresh();
       }
 
       Action::Up | Action::Down | Action::Right | Action::Left => {
@@ -1479,7 +579,7 @@ impl App {
       }
 
       Action::PauseResume => {
-        if self.state.player.is_playing {
+        if self.player.is_playing {
           self.spawn_pause();
         } else {
           self.spawn_resume();
@@ -1599,11 +699,11 @@ impl App {
       }
 
       Action::SearchInsert { to_insert } => {
-        self.search.buffer.push(to_insert);
+        self.search_buffer.push(to_insert);
       }
 
       Action::SearchDelete => {
-        self.search.buffer.pop();
+        self.search_buffer.pop();
       }
 
       Action::SearchUpdated { search } => {
@@ -1637,6 +737,7 @@ impl App {
         }
       }
 
+      /*
       Action::SpotifyStateUpdated { state } => {
         self.state = state;
 
@@ -1644,6 +745,7 @@ impl App {
 
         self.clamp_selection();
       }
+      */
 
       Action::Error(error) => {
         self.spawn_error(error);
@@ -1661,7 +763,7 @@ impl App {
         let focus = search_type.get_focus();
 
         self.set_focus(focus);
-        self.search.search_type = search_type;
+        self.search_type = search_type;
       }
     }
   }
@@ -1672,7 +774,7 @@ impl App {
 
   // Artificially (locally) update the progress time of the playing song
   fn update_progress(&mut self) {
-    if !self.state.player.is_playing {
+    if !self.player.is_playing {
       return;
     }
 
@@ -1682,14 +784,14 @@ impl App {
 
     // Artificially add the elapsed time,
     // without needing to fetch new data
-    self.state.player.progress_ms = self.state.player.progress_ms.saturating_add(elapsed);
+    self.player.progress_ms = self.player.progress_ms.saturating_add(elapsed);
 
     self.last_player_update = std::time::Instant::now();
 
     // Clamp the progress time to the duration,
     // so it doesn't overflow
-    if let Ok(duration) = self.state.player.get_duration() {
-      self.state.player.progress_ms = self.state.player.progress_ms.min(duration);
+    if let Ok(duration) = self.player.get_duration() {
+      self.player.progress_ms = self.player.progress_ms.min(duration);
     }
   }
 
@@ -1711,6 +813,7 @@ impl App {
     });
   }
 
+  /*
   fn spawn_refresh(&self) {
     let spotify = self.spotify.clone();
     let tx = self.action_tx.clone();
@@ -1731,10 +834,11 @@ impl App {
       }
     });
   }
+  */
 
   fn spawn_pause(&self) {
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1751,7 +855,7 @@ impl App {
 
   fn spawn_resume(&self) {
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1768,7 +872,7 @@ impl App {
 
   fn spawn_next(&self) {
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1785,7 +889,7 @@ impl App {
 
   fn spawn_previous(&self) {
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1823,7 +927,7 @@ impl App {
 
   fn spawn_volume(&self, volume: u8) {
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1840,7 +944,7 @@ impl App {
 
   fn spawn_shuffle(&self) {
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1857,7 +961,7 @@ impl App {
 
   fn spawn_repeat(&self) {
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1879,7 +983,7 @@ impl App {
       return;
     };
 
-    let Some(track) = self.state.queue
+    let Some(track) = self.queue
       .as_ref()
       .and_then(|queue| {
         queue.queue.get(index)
@@ -1894,7 +998,7 @@ impl App {
       .unwrap_or_default();
 
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1921,7 +1025,7 @@ impl App {
       return;
     };
 
-    let Some(track) = self.state.history
+    let Some(track) = self.history
       .as_ref()
       .and_then(|history| {
         history.items
@@ -1941,7 +1045,7 @@ impl App {
       .unwrap_or_default();
 
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -1979,7 +1083,7 @@ impl App {
       .unwrap_or_default();
 
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -2006,8 +1110,7 @@ impl App {
       return;
     };
 
-    let Some(track) = self.state
-      .history
+    let Some(track) = self.history
       .as_ref()
       .and_then(|history| {
         history
@@ -2025,7 +1128,7 @@ impl App {
     let uri = track.uri.clone();
 
     let spotify = self.spotify.clone();
-    let player = self.state.player.clone();
+    let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
@@ -2043,10 +1146,10 @@ impl App {
   fn spawn_search(&self) {
     let spotify = self.spotify.clone();
     let tx = self.action_tx.clone();
-    let query = self.search.buffer.clone();
+    let query = self.search_buffer.clone();
 
     tokio::spawn(async move {
-      match Search::get(&spotify.client, &spotify.access_token, &query).await {
+      match spotify.get_search(&query).await {
         Ok(search) => {
           let _ = tx.send(
             Action::SearchUpdated { search },
@@ -2067,9 +1170,7 @@ impl App {
   // ------------------------------------------------------------------------
 
   fn get_volume_percent(&self) -> Result<u8, Error> {
-    self.state
-      .player
-      .device
+    self.player.device
       .as_ref()
       .map(|device| device.volume_percent)
       .ok_or_else(|| {
@@ -2078,9 +1179,7 @@ impl App {
   }
 
   fn get_context_uri(&self) -> Result<String, Error> {
-    self.state
-      .player
-      .context
+    self.player.context
       .as_ref()
       .map(|context| context.uri.clone())
       .ok_or_else(|| {
@@ -2089,7 +1188,7 @@ impl App {
   }
 
   fn clamp_selection(&mut self) {
-    if let Some(queue) = &self.state.queue {
+    if let Some(queue) = &self.queue {
       if queue.queue.is_empty() {
         self.queue_state.select(None);
       }
@@ -2395,7 +1494,7 @@ impl App {
     ])
       .areas(inner);
 
-    let text = match &self.state.player.item {
+    let text = match &self.player.item {
       Some(track) => {
         let artists =
           track
@@ -2429,11 +1528,11 @@ impl App {
       .centered()
       .render(text_area, buf);
 
-    let ratio = if let Ok(duration_ms) = self.state.player.get_duration() {
+    let ratio = if let Ok(duration_ms) = self.player.get_duration() {
       if duration_ms == 0 {
         0.0
       } else {
-        (self.state.player.progress_ms.min(duration_ms)) as f64 / duration_ms as f64
+        (self.player.progress_ms.min(duration_ms)) as f64 / duration_ms as f64
       }
     } else {
       0.0
@@ -2482,10 +1581,10 @@ impl App {
       )
       .bold();
 
-    let mut remaining_ms = self.state.player.get_remaining()
+    let mut remaining_ms = self.player.get_remaining()
       .unwrap_or(0);
 
-    let rows = match &self.state.queue {
+    let rows = match &self.queue {
       Some(queue) if !queue.queue.is_empty() => {
         queue.queue
           .iter()
@@ -2599,7 +1698,7 @@ impl App {
     let input_area = header_block.inner(header_area);
 
     Paragraph::new(
-      Line::from(format!("{}", self.search.buffer))
+      Line::from(format!("{}", self.search_buffer))
     )
       .style(Style::default()
         .bg(Color::Gray)
@@ -2613,7 +1712,7 @@ impl App {
       header_block.clone().render(header_area, buf);
     }
 
-    match self.search.search_type {
+    match self.search_type {
       SearchType::SearchTrack    => Self::render_search_tracks(self, main_area, buf),
       SearchType::SearchArtist   => Self::render_search_artists(self, main_area, buf),
       SearchType::SearchAlbum    => Self::render_search_albums(self, main_area, buf),
@@ -3036,7 +2135,7 @@ impl App {
     ])
       .areas(inner);
 
-    Paragraph::new(Line::from(format!("{}", self.state.user.display_name)))
+    Paragraph::new(Line::from(format!("{}", self.user.display_name)))
       .centered()
       .wrap(Wrap { trim: true })
       .render(title_area, buf);
@@ -3094,7 +2193,7 @@ impl App {
       )
       .bold();
 
-    let rows = match &self.state.history {
+    let rows = match &self.history {
       Some(history) if !history.items.is_empty() => {
         let items = history.items
           .iter()
