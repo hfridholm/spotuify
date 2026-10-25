@@ -11,6 +11,7 @@ use crate::error::Error;
 use std::{
   env,
   sync::Arc,
+  path::PathBuf,
 };
 
 use url::Url;
@@ -163,10 +164,13 @@ fn get_access_token_blocking(
 ) -> Result<String, Error> {
   let client = reqwest::blocking::Client::new();
 
-  let token_path = "refresh_token";
+  let home_dir = dirs::home_dir()
+    .ok_or("Could not determine home directory")?;
+
+  let token_path = home_dir.join(".spotuify").join("refresh_token");
 
   // Try existing refresh token first.
-  if let Ok(refresh_token) = std::fs::read_to_string(token_path) {
+  if let Ok(refresh_token) = std::fs::read_to_string(&token_path) {
     let token = refresh_access_token_blocking(
       &client,
       client_id,
@@ -174,10 +178,7 @@ fn get_access_token_blocking(
     )?;
 
     if let Some(new_refresh_token) = &token.refresh_token {
-      std::fs::write(
-        token_path,
-        new_refresh_token,
-      )?;
+      std::fs::write(&token_path, new_refresh_token)?;
     }
 
     return Ok(token.access_token);
@@ -198,13 +199,8 @@ fn get_access_token_blocking(
   // wait_for_callback() is blocking, but this entire OAuth
   // operation is called from spawn_blocking by App::new().
   if let Err(error) = open::that(&auth_url) {
-    eprintln!(
-      "Could not open browser automatically: {error}"
-    );
-
-    eprintln!(
-      "Open this URL manually:\n{auth_url}"
-    );
+    eprintln!("Could not open browser automatically: {error}");
+    eprintln!("Open this URL manually:\n{auth_url}");
   }
 
   let code = wait_for_callback()?;
@@ -216,14 +212,14 @@ fn get_access_token_blocking(
     &verifier,
   )?;
 
-  let refresh_token = token
-    .refresh_token
+  let refresh_token = token.refresh_token
     .ok_or("Spotify did not return a refresh token")?;
 
-  std::fs::write(
-    token_path,
-    &refresh_token,
-  )?;
+  if let Some(parent) = token_path.parent() {
+    std::fs::create_dir_all(parent)?;
+  }
+
+  std::fs::write(&token_path, &refresh_token)?;
 
   Ok(token.access_token)
 }

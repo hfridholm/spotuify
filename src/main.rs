@@ -22,7 +22,11 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-  dotenvy::dotenv().ok();
+  let home_dir = dirs::home_dir()
+    .ok_or("Could not determine home directory")?;
+
+  let env_path = home_dir.join(".spotuify").join(".env");
+  dotenvy::from_path(&env_path)?;
 
   let (action_tx, action_rx) =
     mpsc::unbounded_channel::<Action>();
