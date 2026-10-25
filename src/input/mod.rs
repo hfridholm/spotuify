@@ -8,46 +8,55 @@
 
 mod keymap;
 
-use std::sync::{
-  Arc,
-  Mutex
-};
-
 use crossterm::event::{
   self,
   Event,
   KeyEventKind
 };
 
-use tokio::sync::mpsc::UnboundedSender;
-
 use crate::app::{
   Action, 
   AppFocus,
 };
 
+use std::{
+  sync::{Arc, Mutex},
+  time::Duration,
+};
+
+use tokio::sync::{
+  mpsc::UnboundedSender,
+  watch,
+};
+
 pub fn spawn_event_handler(
   tx: UnboundedSender<Action>,
-  app_focus:  Arc<Mutex<AppFocus>>,
-) {
-  tokio::spawn(async move {
-    loop {
-      let event_result = tokio::task::spawn_blocking(event::read).await;
-
-      let event = match event_result {
-        Ok(Ok(event)) => event,
-
-        Ok(Err(error)) => {
-          let _ = tx.send(
-            Action::Error(format!("Terminal event error: {error}")),
-          );
+  app_focus: Arc<Mutex<AppFocus>>,
+  mut shutdown: watch::Receiver<bool>,
+) -> tokio::task::JoinHandle<()> {
+  tokio::task::spawn_blocking(move || {
+    // Stop if shutdown has been requested.
+    while !*shutdown.borrow() {
+      let ready = match event::poll(Duration::from_millis(100)) {
+        Ok(ready) => ready,
+        Err(error) => {
+          let _ = tx.send(Action::Error(format!(
+                "Terminal event error: {error}"
+          )));
           return;
         }
+      };
 
+      if !ready {
+        continue;
+      }
+
+      let event = match event::read() {
+        Ok(event) => event,
         Err(error) => {
-          let _ = tx.send(
-            Action::Error(format!("Event task error: {error}")),
-          );
+          let _ = tx.send(Action::Error(format!(
+                "Terminal event error: {error}"
+          )));
           return;
         }
       };
@@ -60,16 +69,14 @@ pub fn spawn_event_handler(
         continue;
       }
 
-      let app_focus = match app_focus.lock() {
-        Ok(app_focus) => *app_focus,
+      let focus = match app_focus.lock() {
+        Ok(focus) => *focus,
         Err(_) => return,
       };
 
-      let action = keymap::key_to_action(app_focus, key);
-
-      if tx.send(action).is_err() {
+      if tx.send(keymap::key_to_action(focus, key)).is_err() {
         return;
       }
     }
-  });
+  })
 }

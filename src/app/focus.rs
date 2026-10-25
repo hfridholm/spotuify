@@ -220,12 +220,28 @@ impl App {
       Err(_) => None,
     };
 
+    // Update the window to belong to the current focus
     if let Some(window) = window
       && let Some(focus_window) = focus.get_window()
       && focus_window != window
     {
       self.set_window(focus_window);
     }
+
+    // Update tab_index to correspond to the current focus
+    self.tab_index = match focus {
+      AppFocus::HomeHistory
+      | AppFocus::SearchTrack  => 0,
+
+      AppFocus::HomePlaylists
+      | AppFocus::SearchArtist => 1,
+
+      AppFocus::SearchAlbum    => 2,
+
+      AppFocus::SearchPlaylist => 3,
+
+      _ => self.tab_index,
+    };
   }
   
   pub(crate) fn set_window(&mut self, window: AppWindow) {

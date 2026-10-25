@@ -33,17 +33,22 @@ async fn main() -> Result<(), Error> {
 
   let mut app = App::new(action_tx.clone()).await?;
 
-  input::spawn_event_handler(
+  let (shutdown_tx, shutdown_rx) =
+    tokio::sync::watch::channel(false);
+
+  let event_task = input::spawn_event_handler(
     action_tx.clone(),
     app.focus.clone(),
+    shutdown_rx,
   );
 
   let mut terminal = ratatui::init();
 
-  let result = app.run(
-    &mut terminal,
-    action_rx,
-  ).await;
+  let result = app.run(&mut terminal, action_rx).await;
+
+  // Stop the event handler and wait for it to exit.
+  let _ = shutdown_tx.send(true);
+  let _ = event_task.await;
 
   ratatui::restore();
 
