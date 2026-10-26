@@ -11,7 +11,7 @@ use crate::api::SpotifyApi;
 use super::{
   AppWindow,
   App,
-  Action
+  AppAction
 };
 
 impl App {
@@ -22,11 +22,11 @@ impl App {
 
     tokio::spawn(async move {
       if let Err(error) = spotify.pause(&player).await {
-        let _ = tx.send(Action::Error(error.to_string()));
+        let _ = tx.send(AppAction::Error(error.to_string()));
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -38,12 +38,12 @@ impl App {
       match spotify.get_user().await {
         Ok(user) => {
           let _ = tx.send(
-            Action::UserUpdated { user }
+            AppAction::UserUpdated { user }
           );
         }
         Err(err) => {
           let _ = tx.send(
-            Action::Error(err.to_string())
+            AppAction::Error(err.to_string())
           );
           return;
         }
@@ -69,13 +69,13 @@ impl App {
         match album.get_tracks(&spotify).await {
           Ok(tracks) => {
             let _ = tx.send(
-              Action::AlbumTracksUpdated { tracks },
+              AppAction::AlbumTracksUpdated { tracks },
             );
           }
 
           Err(err) => {
             let _ = tx.send(
-              Action::Error(err.to_string()),
+              AppAction::Error(err.to_string()),
             );
           }
         }
@@ -92,14 +92,14 @@ impl App {
       let spotify = if spotify.access_token.is_empty() {
         match SpotifyApi::new().await {
           Ok(api) => {
-            let _ = tx.send(Action::ApiUpdated {
+            let _ = tx.send(AppAction::ApiUpdated {
               api: api.clone(),
             });
 
             api
           }
           Err(err) => {
-            let _ = tx.send(Action::Error(err.to_string()));
+            let _ = tx.send(AppAction::Error(err.to_string()));
             return;
           }
         }
@@ -115,10 +115,10 @@ impl App {
       let player_task = async {
         match spotify.get_player().await {
           Ok(player) => {
-            let _ = tx_player.send(Action::PlayerUpdated { player });
+            let _ = tx_player.send(AppAction::PlayerUpdated { player });
           }
           Err(err) => {
-            let _ = tx_player.send(Action::Error(err.to_string()));
+            let _ = tx_player.send(AppAction::Error(err.to_string()));
           }
         }
       };
@@ -126,10 +126,10 @@ impl App {
       let queue_task = async {
         match spotify.get_queue().await {
           Ok(queue) => {
-            let _ = tx_queue.send(Action::QueueUpdated { queue });
+            let _ = tx_queue.send(AppAction::QueueUpdated { queue });
           }
           Err(err) => {
-            let _ = tx_queue.send(Action::Error(err.to_string()));
+            let _ = tx_queue.send(AppAction::Error(err.to_string()));
           }
         }
       };
@@ -137,10 +137,10 @@ impl App {
       let user_task = async {
         match spotify.get_user().await {
           Ok(user) => {
-            let _ = tx_user.send(Action::UserUpdated { user });
+            let _ = tx_user.send(AppAction::UserUpdated { user });
           }
           Err(err) => {
-            let _ = tx_user.send(Action::Error(err.to_string()));
+            let _ = tx_user.send(AppAction::Error(err.to_string()));
           }
         }
       };
@@ -158,14 +158,14 @@ impl App {
       let spotify = if spotify.access_token.is_empty() {
         match SpotifyApi::new().await {
           Ok(api) => {
-            let _ = tx.send(Action::ApiUpdated {
+            let _ = tx.send(AppAction::ApiUpdated {
               api: api.clone(),
             });
 
             api
           }
           Err(err) => {
-            let _ = tx.send(Action::Error(err.to_string()));
+            let _ = tx.send(AppAction::Error(err.to_string()));
             return;
           }
         }
@@ -180,10 +180,10 @@ impl App {
       let player_task = async {
         match spotify.get_player().await {
           Ok(player) => {
-            let _ = tx_player.send(Action::PlayerUpdated { player });
+            let _ = tx_player.send(AppAction::PlayerUpdated { player });
           }
           Err(err) => {
-            let _ = tx_player.send(Action::Error(err.to_string()));
+            let _ = tx_player.send(AppAction::Error(err.to_string()));
           }
         }
       };
@@ -191,10 +191,10 @@ impl App {
       let queue_task = async {
         match spotify.get_queue().await {
           Ok(queue) => {
-            let _ = tx_queue.send(Action::QueueUpdated { queue });
+            let _ = tx_queue.send(AppAction::QueueUpdated { queue });
           }
           Err(err) => {
-            let _ = tx_queue.send(Action::Error(err.to_string()));
+            let _ = tx_queue.send(AppAction::Error(err.to_string()));
           }
         }
       };
@@ -211,12 +211,12 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.resume(&player).await {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -228,29 +228,29 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.next(&player).await {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
-  pub(crate) fn spawn_previous(&self) {
+  pub(crate) fn spawn_prev(&self) {
     let spotify = self.spotify.clone();
     let player = self.player.clone();
     let tx = self.action_tx.clone();
 
     tokio::spawn(async move {
-      if let Err(error) = spotify.previous(&player).await {
+      if let Err(error) = spotify.prev(&player).await {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -283,12 +283,12 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.volume(&player, volume).await {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -300,12 +300,12 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.shuffle(&player).await {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -317,12 +317,12 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.repeat(&player).await {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -360,12 +360,12 @@ impl App {
       ).await
       {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -402,12 +402,12 @@ impl App {
       ).await
       {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -433,9 +433,9 @@ impl App {
     let player = self.player.clone();
     let tx = self.action_tx.clone();
 
-    // Create Action::Message
+    // Create AppAction::Message
     let _ = tx.send(
-      Action::Message(format!("Playing: {}\nTrack Uri: {}\nAlbum Uri: {}", track.name.to_string(), track.uri.to_string(), track.album.name.to_string()))
+      AppAction::Message(format!("Playing: {}\nTrack Uri: {}\nAlbum Uri: {}", track.name.to_string(), track.uri.to_string(), track.album.name.to_string()))
     );
 
     tokio::spawn(async move {
@@ -446,12 +446,12 @@ impl App {
       ).await
       {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -480,12 +480,12 @@ impl App {
     tokio::spawn(async move {
       if let Err(error) = spotify.queue(&player, &track_uri).await {
         let _ = tx.send(
-          Action::Error(error.to_string()),
+          AppAction::Error(error.to_string()),
         );
         return;
       }
 
-      let _ = tx.send(Action::Refresh);
+      let _ = tx.send(AppAction::Refresh);
     });
   }
 
@@ -498,13 +498,13 @@ impl App {
       match spotify.get_search(&query).await {
         Ok(search) => {
           let _ = tx.send(
-            Action::SearchUpdated { search },
+            AppAction::SearchUpdated { search },
           );
         }
 
         Err(err) => {
           let _ = tx.send(
-            Action::Error(err.to_string()),
+            AppAction::Error(err.to_string()),
           );
         }
       }

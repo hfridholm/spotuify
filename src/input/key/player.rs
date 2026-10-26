@@ -11,48 +11,48 @@ use crossterm::event::{
   KeyEvent,
 };
 
-use super::Action;
+use super::AppAction;
 
-pub(crate) fn player_key_action(
+pub(crate) fn parse_key(
   key: KeyEvent,
-) -> Action {
+) -> Option<AppAction> {
   match key.code {
     KeyCode::Enter => {
-      Action::Refresh
+      Some(AppAction::Refresh)
     }
 
     KeyCode::Char(' ') => {
-      Action::PauseResume
+      Some(AppAction::PauseResume)
     }
 
     KeyCode::Right | KeyCode::Char('l') => {
-      Action::Next
+      Some(AppAction::Next)
     }
 
     KeyCode::Left | KeyCode::Char('h') => {
-      Action::Previous
+      Some(AppAction::Prev)
     }
 
     KeyCode::Down | KeyCode::Char('j') => {
-      Action::VolumeDown
+      Some(AppAction::VolumeDown)
     }
 
     KeyCode::Up | KeyCode::Char('k') => {
-      Action::VolumeUp
+      Some(AppAction::VolumeUp)
     }
 
     KeyCode::Char('m') => {
-      Action::Mute
+      Some(AppAction::Mute)
     }
 
     KeyCode::Char('s') => {
-      Action::ToggleShuffle
+      Some(AppAction::ToggleShuffle)
     }
 
     KeyCode::Char('r') => {
-      Action::ToggleRepeat
+      Some(AppAction::ToggleRepeat)
     }
 
-    _ => Action::Render,
+    _ => None
   }
 }

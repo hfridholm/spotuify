@@ -292,7 +292,7 @@ impl SpotifyApi {
     ).await
   }
 
-  pub async fn previous(
+  pub async fn prev(
     &self,
     player: &Player,
   ) -> Result<(), Error> {

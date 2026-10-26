@@ -7,7 +7,7 @@
 
 use super::{
   App,
-  Action
+  AppAction
 };
 
 // ============================================================================
@@ -109,7 +109,7 @@ impl AppFocus  {
 }
 
 impl App {
-  pub(crate) fn move_focus(&mut self, action: Action) {
+  pub(crate) fn move_focus(&mut self, action: AppAction) {
     let app_focus = match self.focus.lock() {
       Ok(app_focus) => *app_focus,
       Err(_) => return,
@@ -123,7 +123,7 @@ impl App {
     let new_focus = match app_focus {
       AppFocus::Search => {
         match action {
-          Action::Down => {
+          AppAction::Down => {
             match self.tab_index {
               0 => AppFocus::SearchTrack,
               1 => AppFocus::SearchAlbum,
@@ -132,73 +132,73 @@ impl App {
               _ => app_focus,
             }
           },
-          Action::Left => AppFocus::Queue,
-          Action::Up   => AppFocus::Navbar,
+          AppAction::Left => AppFocus::Queue,
+          AppAction::Up   => AppFocus::Navbar,
           _ => app_focus,
         }
       },
 
       AppFocus::SearchTrack | AppFocus::SearchAlbum | AppFocus::SearchArtist | AppFocus::SearchPlaylist => {
         match action {
-          Action::Up   => AppFocus::Search,
-          Action::Down => AppFocus::Player,
-          Action::Left => AppFocus::Queue,
+          AppAction::Up   => AppFocus::Search,
+          AppAction::Down => AppFocus::Player,
+          AppAction::Left => AppFocus::Queue,
           _ => app_focus,
         }
       },
 
       AppFocus::Track | AppFocus::Artist | AppFocus::Playlist => {
         match action {
-          Action::Up   => AppFocus::Navbar,
-          Action::Down => AppFocus::Player,
-          Action::Left => AppFocus::Queue,
+          AppAction::Up   => AppFocus::Navbar,
+          AppAction::Down => AppFocus::Player,
+          AppAction::Left => AppFocus::Queue,
           _ => app_focus,
         }
       },
 
       AppFocus::Home => {
         match action {
-          Action::Down => {
+          AppAction::Down => {
             match self.tab_index {
               0 => AppFocus::HomeHistory,
               1 => AppFocus::HomePlaylists,
               _ => app_focus,
             }
           },
-          Action::Left => AppFocus::Queue,
-          Action::Up   => AppFocus::Navbar,
+          AppAction::Left => AppFocus::Queue,
+          AppAction::Up   => AppFocus::Navbar,
           _ => app_focus,
         }
       },
 
       AppFocus::HomePlaylists | AppFocus::HomeHistory | AppFocus::HomeFollowing => {
         match action {
-          Action::Up   => AppFocus::Home,
-          Action::Down => AppFocus::Player,
-          Action::Left => AppFocus::Queue,
+          AppAction::Up   => AppFocus::Home,
+          AppAction::Down => AppFocus::Player,
+          AppAction::Left => AppFocus::Queue,
           _ => app_focus,
         }
       },
 
       AppFocus::Player => {
         match action {
-          Action::Up => app_window.get_focus(),
+          AppAction::Up => app_window.get_focus(),
           _ => app_focus,
         }
       }
 
       AppFocus::Queue => {
         match action {
-          Action::Down  => AppFocus::Player,
-          Action::Right => app_window.get_focus(),
+          AppAction::Down  => AppFocus::Player,
+          AppAction::Right => app_window.get_focus(),
           _ => app_focus,
         }
       }
 
       AppFocus::Navbar => {
         match action {
-          Action::Left => AppFocus::Queue,
-          Action::Down => app_window.get_focus(),
+          AppAction::Left => AppFocus::Queue,
+          AppAction::Down => app_window.get_focus(),
           _ => app_focus,
         }
       }
@@ -255,7 +255,7 @@ impl App {
     // Let the window initialize itself
     match window {
       AppWindow::Home => {
-        let _ = tx.send(Action::EnterHome);
+        let _ = tx.send(AppAction::EnterHome);
       }
       _ => {}
     }

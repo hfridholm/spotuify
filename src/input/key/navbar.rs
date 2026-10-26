@@ -10,24 +10,24 @@ use crossterm::event::{
   KeyEvent,
 };
 
-use super::Action;
+use super::AppAction;
 
-pub(crate) fn navbar_key_action(
+pub(crate) fn parse_key(
   key: KeyEvent,
-) -> Action {
+) -> Option<AppAction> {
   match key.code {
     KeyCode::Enter => {
-      Action::NavbarEnter
+      Some(AppAction::NavbarEnter)
     }
 
     KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-      Action::ListNext { max: 2 }
+      Some(AppAction::ListNext { count: 1, max: 2 })
     }
 
     KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-      Action::ListPrev
+      Some(AppAction::ListPrev { count: 1 })
     }
 
-    _ => Action::Render,
+    _ => None
   }
 }

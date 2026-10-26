@@ -1,9 +1,9 @@
 /*  _  __                                
- * | |/ /___ _   _ _ __ ___   __ _ _ __  
- * | ' // _ \ | | | '_ ` _ \ / _` | '_ \ 
- * | . \  __/ |_| | | | | | | (_| | |_) |
- * |_|\_\___|\__, |_| |_| |_|\__,_| .__/ 
- *           |___/                |_|
+ * | |/ /___ _   _ 
+ * | ' // _ \ | | |
+ * | . \  __/ |_| |
+ * |_|\_\___|\__, |
+ *           |___/
  */
 
 pub mod home;
@@ -13,55 +13,57 @@ pub mod queue;
 pub mod search;
 
 use crossterm::event::{
-  KeyCode, KeyEvent, KeyModifiers,
+  KeyCode,
+  KeyEvent,
+  KeyModifiers,
 };
 
 use super::{
-  Action,
+  AppAction,
   AppFocus
 };
 
-pub(crate) fn key_to_action(
+pub(crate) fn parse_key(
   app_focus: AppFocus,
   key: KeyEvent,
-) -> Action {
+) -> Option<AppAction> {
   match key.code {
     KeyCode::Char('c') => {
       if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Action::Quit;
+        return Some(AppAction::Quit);
       }
     }
 
     KeyCode::Char('j') => {
       if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Action::Down;
+        return Some(AppAction::Down);
       }
     }
 
     KeyCode::Char('k') => {
       if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Action::Up;
+        return Some(AppAction::Up);
       }
     }
 
     KeyCode::Char('h') => {
       if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Action::Left;
+        return Some(AppAction::Left);
       }
     }
 
     KeyCode::Char('l') => {
       if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return Action::Right;
+        return Some(AppAction::Right);
       }
     }
 
     KeyCode::F(1) => {
-      return Action::SetFocus { focus: AppFocus::Search };
+      return Some(AppAction::SetFocus { focus: AppFocus::Search });
     }
 
     KeyCode::F(2) => {
-      return Action::SetFocus { focus: AppFocus::HomePlaylists };
+      return Some(AppAction::SetFocus { focus: AppFocus::HomePlaylists });
     }
 
     _ => {}
@@ -69,50 +71,50 @@ pub(crate) fn key_to_action(
 
   match app_focus {
     AppFocus::Navbar => {
-      navbar::navbar_key_action(key)
+      navbar::parse_key(key)
     }
 
     AppFocus::Player => {
-      player::player_key_action(key)
+      player::parse_key(key)
     }
 
     AppFocus::Queue => {
-      queue::queue_key_action(key)
+      queue::parse_key(key)
     }
 
     AppFocus::Home => {
-      home::home_key_action(key)
+      home::parse_key(key)
     }
 
     AppFocus::HomeHistory => {
-      home::home_history_key_action(key)
+      home::history_parse_key(key)
     }
 
     AppFocus::HomePlaylists => {
-      home::home_playlists_key_action(key)
+      home::playlist_parse_key(key)
     }
 
     AppFocus::Search => {
-      search::search_key_action(key)
+      search::parse_key(key)
     }
 
     AppFocus::SearchTrack => {
-      search::search_track_key_action(key)
+      search::track_parse_key(key)
     }
 
     AppFocus::SearchAlbum => {
-      search::search_album_key_action(key)
+      search::album_parse_key(key)
     }
 
     AppFocus::SearchPlaylist => {
-      search::search_playlist_key_action(key)
+      search::playlist_parse_key(key)
     }
 
     AppFocus::SearchArtist => {
-      search::search_artist_key_action(key)
+      search::artist_parse_key(key)
     }
 
-    _ => Action::Render
+    _ => None
   }
 }
 

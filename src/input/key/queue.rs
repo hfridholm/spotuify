@@ -10,32 +10,32 @@ use crossterm::event::{
   KeyEvent,
 };
 
-use super::Action;
+use super::AppAction;
 
-pub(crate) fn queue_key_action(
+pub(crate) fn parse_key(
   key: KeyEvent,
-) -> Action {
+) -> Option<AppAction> {
   match key.code {
     KeyCode::Enter => {
-      Action::PlayQueue
+      Some(AppAction::PlayQueue)
     }
 
     KeyCode::Down | KeyCode::Char('j') => {
-      Action::QueueNext
+      Some(AppAction::QueueNext { count: 1 })
     }
 
     KeyCode::Up | KeyCode::Char('k') => {
-      Action::QueuePrevious
+      Some(AppAction::QueuePrev { count: 1 })
     }
 
     KeyCode::Home => {
-      Action::QueueFirst
+      Some(AppAction::QueueFirst)
     }
 
     KeyCode::End => {
-      Action::QueueLast
+      Some(AppAction::QueueLast)
     }
 
-    _ => Action::Render,
+    _ => None
   }
 }

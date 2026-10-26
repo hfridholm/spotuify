@@ -6,15 +6,21 @@
  *         |_|   |_|    
  */
 
-mod actions;
+mod action;
 mod focus;
 mod helpers;
 mod notifications;
 mod spawn;
 
-pub use actions::Action;
+pub use action::AppAction;
 pub use focus::{
-  AppFocus, AppWindow
+  AppFocus,
+  AppWindow,
+};
+
+pub use crate::input::{
+  InputMode,
+  InputBuffer,
 };
 
 use crate::error::Error;
@@ -75,16 +81,22 @@ pub struct App {
   pub(crate) list_index: usize,
   pub(crate) tab_index: usize,
 
-  pub(crate) action_tx: UnboundedSender<Action>,
+  pub(crate) action_tx: UnboundedSender<AppAction>,
 
   pub(crate) error_list: Arc<Mutex<VecDeque<(u64, String)>>>,
   pub(crate) message_list: Arc<Mutex<VecDeque<(u64, String)>>>,
+
+  pub(crate) input:   InputBuffer,
+  pub(crate) mode:    InputMode,
+  pub(crate) buffer:  String,
+  pub(crate) command: String,
+
   pub(crate) exit: bool,
 }
 
 impl App {
   pub(crate) async fn new(
-    action_tx: UnboundedSender<Action>,
+    action_tx: UnboundedSender<AppAction>,
   ) -> Result<Self, Error> {
     Ok(Self {
       spotify: SpotifyApi::default(), // Maybe rename this to "api"
@@ -101,7 +113,7 @@ impl App {
       history: None,
       queue:   None,
 
-      search:        Search::default(),
+      search: Search::default(),
       search_buffer: String::default(),
 
       track:    None,
@@ -122,6 +134,11 @@ impl App {
       error_list:   Arc::new(Mutex::new(VecDeque::new())),
       message_list: Arc::new(Mutex::new(VecDeque::new())),
 
+      input: InputBuffer::default(),
+      mode:  InputMode::Normal,
+      command: String::default(),
+      buffer:  String::default(),
+
       exit: false,
     })
   }
@@ -129,10 +146,10 @@ impl App {
   pub(crate) async fn run(
     &mut self,
     terminal: &mut DefaultTerminal,
-    mut action_rx: UnboundedReceiver<Action>,
+    mut action_rx: UnboundedReceiver<AppAction>,
   ) -> Result<(), Error> {
     // Immediately fetch Spotify state
-    self.action_tx.send(Action::Initialize)?;
+    self.action_tx.send(AppAction::Initialize)?;
 
     // Render playing track progress bar every 33 ms
     let mut render_interval = time::interval(
@@ -165,7 +182,7 @@ impl App {
         }
 
         _ = refresh_interval.tick() => {
-          self.action_tx.send(Action::Refresh)?;
+          self.action_tx.send(AppAction::Refresh)?;
         }
       }
     }

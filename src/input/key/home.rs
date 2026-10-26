@@ -11,74 +11,74 @@ use crossterm::event::{
 };
 
 use super::{
-  Action,
+  AppAction,
   AppFocus
 };
 
-pub(crate) fn home_key_action(
+pub(crate) fn parse_key(
   key: KeyEvent,
-) -> Action {
+) -> Option<AppAction> {
   match key.code {
     KeyCode::Tab | KeyCode::Right | KeyCode::Char('j') => {
-      Action::ListNext { max: 2 }
+      Some(AppAction::ListNext { count: 1, max: 2 })
     }
 
     KeyCode::BackTab | KeyCode::Left | KeyCode::Char('k') => {
-      Action::ListPrev
+      Some(AppAction::ListPrev { count: 1 })
     }
 
-    _ => Action::Render,
+    _ => None
   }
 }
 
-pub(crate) fn home_playlists_key_action(
+pub(crate) fn playlist_parse_key(
   key: KeyEvent,
-) -> Action {
+) -> Option<AppAction> {
   match key.code {
     KeyCode::Enter => {
-      Action::ShowHomePlaylist
+      Some(AppAction::ShowHomePlaylist)
     }
 
     KeyCode::Down | KeyCode::Char('j') => {
-      Action::TableNext
+      Some(AppAction::TableNext { count: 1 })
     }
 
     KeyCode::Up | KeyCode::Char('k') => {
-      Action::TablePrevious
+      Some(AppAction::TablePrev { count: 1 })
     }
 
     KeyCode::BackTab => {
-      Action::SetFocusAndTabIndex { focus: AppFocus::HomeHistory, tab_index: 0 }
+      Some(AppAction::SetFocusAndTabIndex { focus: AppFocus::HomeHistory, tab_index: 0 })
     }
 
-    _ => Action::Render,
+    _ => None
   }
 }
 
-pub(crate) fn home_history_key_action(
+pub(crate) fn history_parse_key(
   key: KeyEvent,
-) -> Action {
+) -> Option<AppAction> {
   match key.code {
     KeyCode::Enter => {
-      Action::PlayHistory
+      Some(AppAction::PlayHistory)
     }
 
     KeyCode::Left | KeyCode::Char('h') => {
-      Action::QueueHistory
+      Some(AppAction::QueueHistory)
     }
 
     KeyCode::Down | KeyCode::Char('j') => {
-      Action::TableNext
+      Some(AppAction::TableNext { count: 1 })
     }
 
     KeyCode::Up | KeyCode::Char('k') => {
-      Action::TablePrevious
+      Some(AppAction::TablePrev { count: 1 })
     }
 
     KeyCode::Tab => {
-      Action::SetFocusAndTabIndex { focus: AppFocus::HomePlaylists, tab_index: 1 }
+      Some(AppAction::SetFocusAndTabIndex { focus: AppFocus::HomePlaylists, tab_index: 1 })
     }
 
-    _ => Action::Render,
+    _ => None
   }
 }

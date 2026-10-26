@@ -20,8 +20,13 @@ use super::{
   AppFocus,
 };
 
+use crossterm::event::{
+  KeyCode,
+  KeyEvent,
+};
+
 #[derive(Debug, Clone)]
-pub enum Action {
+pub enum AppAction {
   Quit,
 
   Tick,
@@ -29,6 +34,8 @@ pub enum Action {
 
   Initialize,
   Refresh,
+
+  KeyPress { key: KeyEvent },
 
   Up,
   Down,
@@ -38,13 +45,13 @@ pub enum Action {
   NavbarEnter,
   EnterHome,
 
-  ListNext { max: usize },
-  ListPrev,
+  ListNext { count: usize, max: usize },
+  ListPrev { count: usize },
 
   PauseResume,
 
   Next,
-  Previous,
+  Prev,
 
   VolumeUp,
   VolumeDown,
@@ -53,13 +60,13 @@ pub enum Action {
   ToggleShuffle,
   ToggleRepeat,
 
-  QueueNext,
-  QueuePrevious,
+  QueueNext { count: usize },
+  QueuePrev { count: usize },
   QueueFirst,
   QueueLast,
 
-  TableNext,
-  TablePrevious,
+  TableNext { count: usize },
+  TablePrev { count: usize },
   TableFirst,
   TableLast,
 
@@ -99,33 +106,37 @@ pub enum Action {
 }
 
 impl App {
-  pub(crate) fn update(&mut self, action: Action) {
+  pub(crate) fn update(&mut self, action: AppAction) {
     match action {
-      Action::Quit => {
+      AppAction::Quit => {
         self.exit = true;
       }
 
-      Action::Tick => {}
+      AppAction::KeyPress { key } => {
+        self.handle_key(key);
+      }
 
-      Action::Render => {}
+      AppAction::Tick => {}
 
-      Action::Refresh => {
+      AppAction::Render => {}
+
+      AppAction::Refresh => {
         self.spawn_refresh();
       }
 
-      Action::Initialize => {
+      AppAction::Initialize => {
         self.spawn_initialize();
       }
 
-      Action::Up | Action::Down | Action::Right | Action::Left => {
+      AppAction::Up | AppAction::Down | AppAction::Right | AppAction::Left => {
         self.move_focus(action);
       }
 
-      Action::EnterHome => {
+      AppAction::EnterHome => {
         self.spawn_fetch_user();
       }
 
-      Action::NavbarEnter => {
+      AppAction::NavbarEnter => {
         const TABS: [(AppWindow, &str); 2] = [
           (AppWindow::Home,   "Home"),
           (AppWindow::Search, "Search"),
@@ -136,15 +147,15 @@ impl App {
         }
       }
 
-      Action::ListNext { max } => {
+      AppAction::ListNext { count: _, max } => {
         self.list_index = self.list_index.saturating_add(1).min(max.saturating_sub(1));
       }
 
-      Action::ListPrev => {
+      AppAction::ListPrev { count: _ } => {
         self.list_index = self.list_index.saturating_sub(1);
       }
 
-      Action::PauseResume => {
+      AppAction::PauseResume => {
         if self.player.is_playing {
           self.spawn_pause();
         } else {
@@ -152,115 +163,115 @@ impl App {
         }
       }
 
-      Action::Next => {
+      AppAction::Next => {
         self.spawn_next();
       }
 
-      Action::Previous => {
-        self.spawn_previous();
+      AppAction::Prev => {
+        self.spawn_prev();
       }
 
-      Action::VolumeUp => {
+      AppAction::VolumeUp => {
         self.spawn_volume_up();
       }
 
-      Action::VolumeDown => {
+      AppAction::VolumeDown => {
         self.spawn_volume_down();
       }
 
-      Action::Mute => {
+      AppAction::Mute => {
         self.spawn_mute();
       }
 
-      Action::ToggleShuffle => {
+      AppAction::ToggleShuffle => {
         self.spawn_shuffle();
       }
 
-      Action::ToggleRepeat => {
+      AppAction::ToggleRepeat => {
         self.spawn_repeat();
       }
 
-      Action::TableNext => {
+      AppAction::TableNext { count: _ } => {
         self.table_state.select_next();
       }
 
-      Action::TablePrevious => {
+      AppAction::TablePrev { count: _ } => {
         self.table_state.select_previous();
       }
 
-      Action::TableFirst => {
+      AppAction::TableFirst => {
         self.table_state.select_first();
       }
 
-      Action::TableLast => {
+      AppAction::TableLast => {
         self.table_state.select_last();
       }
 
-      Action::QueueNext => {
+      AppAction::QueueNext { count: _ } => {
         self.queue_state.select_next();
       }
 
-      Action::QueuePrevious => {
+      AppAction::QueuePrev { count: _ } => {
         self.queue_state.select_previous();
       }
 
-      Action::QueueFirst => {
+      AppAction::QueueFirst => {
         self.queue_state.select_first();
       }
 
-      Action::QueueLast => {
+      AppAction::QueueLast => {
         self.queue_state.select_last();
       }
 
-      Action::PlayQueue => {
+      AppAction::PlayQueue => {
         self.spawn_play_queue();
       }
 
-      Action::PlayHistory => {
+      AppAction::PlayHistory => {
         self.spawn_play_history();
       }
 
-      Action::PlaySearch => {
+      AppAction::PlaySearch => {
         self.spawn_play_search();
       }
 
-      Action::QueueHistory => {
+      AppAction::QueueHistory => {
         self.spawn_queue_history();
       }
 
-      Action::Search => {
+      AppAction::Search => {
         self.spawn_search();
       }
 
-      Action::SearchInsert { to_insert } => {
+      AppAction::SearchInsert { to_insert } => {
         self.search_buffer.push(to_insert);
       }
 
-      Action::SearchDelete => {
+      AppAction::SearchDelete => {
         self.search_buffer.pop();
       }
 
-      Action::SearchUpdated { search } => {
+      AppAction::SearchUpdated { search } => {
         self.search = search;
 
         self.tab_index = 0;
         self.set_focus(AppFocus::SearchTrack);
       }
 
-      Action::PlayerUpdated { player } => {
+      AppAction::PlayerUpdated { player } => {
         self.player = player;
         self.last_player_update = std::time::Instant::now();
       }
 
-      Action::UserUpdated { user } => {
+      AppAction::UserUpdated { user } => {
         self.user = user;
       }
 
-      Action::ApiUpdated { api } => {
+      AppAction::ApiUpdated { api } => {
         self.spotify = api;
       }
 
-      Action::QueueUpdated { queue } => {
+      AppAction::QueueUpdated { queue } => {
         self.queue = Some(queue);
 
         if let Some(queue) = &self.queue {
@@ -275,7 +286,7 @@ impl App {
         }
       }
 
-      Action::ShowSearchTrack => {
+      AppAction::ShowSearchTrack => {
         let Some(index) =
           self.table_state.selected()
         else {
@@ -288,7 +299,7 @@ impl App {
         }
       }
 
-      Action::ShowSearchArtist => {
+      AppAction::ShowSearchArtist => {
         let Some(index) =
           self.table_state.selected()
         else {
@@ -301,15 +312,15 @@ impl App {
         }
       }
 
-      Action::ShowSearchAlbum => {
+      AppAction::ShowSearchAlbum => {
         self.spawn_show_search_album();
       }
 
-      Action::AlbumTracksUpdated { tracks } => {
+      AppAction::AlbumTracksUpdated { tracks } => {
         self.album_tracks = Some(tracks);
       }
 
-      Action::ShowHomePlaylist => {
+      AppAction::ShowHomePlaylist => {
         let Some(index) =
           self.table_state.selected()
         else {
@@ -322,23 +333,23 @@ impl App {
         }
       }
 
-      Action::Error(error) => {
+      AppAction::Error(error) => {
         self.spawn_error(error);
       }
 
-      Action::Message(message) => {
+      AppAction::Message(message) => {
         self.spawn_message(message);
       }
 
-      Action::SetWindow { window } => {
+      AppAction::SetWindow { window } => {
         self.set_window(window);
       }
 
-      Action::SetFocus { focus } => {
+      AppAction::SetFocus { focus } => {
         self.set_focus(focus);
       }
 
-      Action::SetFocusAndTabIndex { focus, tab_index } => {
+      AppAction::SetFocusAndTabIndex { focus, tab_index } => {
         self.set_focus(focus);
         self.tab_index = tab_index;
       }

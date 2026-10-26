@@ -14,8 +14,8 @@ mod error;
 
 use error::Error;
 use app::{
-  Action,
-  App
+  AppAction,
+  App,
 };
 
 use tokio::sync::mpsc;
@@ -29,18 +29,14 @@ async fn main() -> Result<(), Error> {
   dotenvy::from_path(&env_path)?;
 
   let (action_tx, action_rx) =
-    mpsc::unbounded_channel::<Action>();
+    mpsc::unbounded_channel::<AppAction>();
 
   let mut app = App::new(action_tx.clone()).await?;
 
   let (shutdown_tx, shutdown_rx) =
     tokio::sync::watch::channel(false);
 
-  let event_task = input::spawn_event_handler(
-    action_tx.clone(),
-    app.focus.clone(),
-    shutdown_rx,
-  );
+  let event_task = app.spawn_event_handler(shutdown_rx);
 
   let mut terminal = ratatui::init();
 
