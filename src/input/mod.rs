@@ -121,10 +121,14 @@ pub enum InputAction {
   JumpDown,
   JumpLeft,
   JumpRight,
+  JumpTop,
+  JumpBottom,
   MoveUp    { count: usize },
   MoveDown  { count: usize },
   MoveLeft  { count: usize },
   MoveRight { count: usize },
+  MoveTop,
+  MoveBottom,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,7 +213,9 @@ impl InputBuffer {
 
     // Only plain, unmodified character keys match these commands.
     let chars: Option<String> = self.keys.iter().map(|key| {
-      if key.modifiers == KeyModifiers::NONE {
+      if key.modifiers == KeyModifiers::NONE
+        || key.modifiers == KeyModifiers::SHIFT
+      {
         if let KeyCode::Char(c) = key.code {
           return Some(c);
         }
@@ -222,21 +228,43 @@ impl InputBuffer {
     };
 
     match chars.as_str() {
-      // "g" | "d" => InputStatus::Pending,
-      "j" => InputStatus::Complete(InputAction::MoveDown  { count }),
-      "k" => InputStatus::Complete(InputAction::MoveUp    { count }),
-      "h" => InputStatus::Complete(InputAction::MoveLeft  { count }),
-      "l" => InputStatus::Complete(InputAction::MoveRight { count }),
-      /*
-      _ if ["gg", "dd", "dw", "j", "k", "w"]
+      "j"  => InputStatus::Complete(InputAction::MoveDown  { count }),
+      "k"  => InputStatus::Complete(InputAction::MoveUp    { count }),
+      "h"  => InputStatus::Complete(InputAction::MoveLeft  { count }),
+      "l"  => InputStatus::Complete(InputAction::MoveRight { count }),
+      "H"  => InputStatus::Complete(InputAction::MoveTop),
+      "L"  => InputStatus::Complete(InputAction::MoveBottom),
+      "gg" => InputStatus::Complete(InputAction::JumpTop),
+      "G"  => InputStatus::Complete(InputAction::JumpBottom),
+      _ if ["gg", "dd", "j", "k"]
         .iter()
         .any(|cmd| cmd.starts_with(chars.as_str())) =>
       {
         InputStatus::Pending
       }
-      */
       _ => InputStatus::Invalid,
     }
+  }
+
+  pub fn string(&self) -> String {
+    let mut string = self.count
+      .filter(|n| *n > 0)
+      .map(|n| n.to_string())
+      .unwrap_or_default();
+
+    for key in &self.keys {
+      match key.code {
+        KeyCode::Char(c)   => string.push(c),
+        KeyCode::Esc       => string.push_str("<Esc>"),
+        KeyCode::Enter     => string.push_str("<Enter>"),
+        KeyCode::Backspace => string.push_str("<BS>"),
+        KeyCode::Up        => string.push_str("<Up>"),
+        KeyCode::Down      => string.push_str("<Down>"),
+        _ => string.push('?'),
+      }
+    }
+
+    string
   }
 }
 
@@ -348,28 +376,5 @@ impl App {
 
   fn execute_command(&mut self) {
     // Execute commands such as :w or :q.
-  }
-}
-
-impl InputBuffer {
-  pub fn string(&self) -> String {
-    let mut string = self.count
-      .filter(|n| *n > 0)
-      .map(|n| n.to_string())
-      .unwrap_or_default();
-
-    for key in &self.keys {
-      match key.code {
-        KeyCode::Char(c)   => string.push(c),
-        KeyCode::Esc       => string.push_str("<Esc>"),
-        KeyCode::Enter     => string.push_str("<Enter>"),
-        KeyCode::Backspace => string.push_str("<BS>"),
-        KeyCode::Up        => string.push_str("<Up>"),
-        KeyCode::Down      => string.push_str("<Down>"),
-        _ => string.push('?'),
-      }
-    }
-
-    string
   }
 }

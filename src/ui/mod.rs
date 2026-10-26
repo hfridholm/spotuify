@@ -16,6 +16,7 @@ mod player;
 mod playlist;
 mod queue;
 mod search;
+mod status;
 mod track;
 
 use crate::app::{
@@ -105,11 +106,13 @@ impl Widget for &mut App {
       main_area,
       player_area,
       instructions_area,
+      status_area,
     ] =
       Layout::vertical([
         Constraint::Min(5),
         Constraint::Length(5),
         Constraint::Length(2),
+        Constraint::Length(1),
       ])
       .margin(1)
       .areas(area);
@@ -160,6 +163,11 @@ impl Widget for &mut App {
 
     self.render_instructions(
       instructions_area,
+      buf,
+    );
+
+    self.render_status(
+      status_area,
       buf,
     );
 

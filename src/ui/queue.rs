@@ -64,6 +64,11 @@ impl App {
     let mut remaining_ms = self.player.get_remaining()
       .unwrap_or(0);
 
+    let selected_index = match self.queue_state.selected() {
+      Some(index) => index,
+      None        => 1,
+    };
+
     let rows = match &self.queue {
       Some(queue) if !queue.queue.is_empty() => {
         queue.queue
@@ -74,8 +79,14 @@ impl App {
 
             remaining_ms = remaining_ms.saturating_add(track.duration_ms);
 
+            let rel_index: i64 = if index != selected_index {
+              (index as i64 - selected_index as i64).abs()
+            } else {
+              (selected_index + 1) as i64
+            };
+
             Row::new([
-              Cell::from(format!("{:>2}", index + 1)),
+              Cell::from(format!("{:>2}", rel_index)),
               Cell::from(track.name.as_str()),
               Cell::from(time_str),
             ])

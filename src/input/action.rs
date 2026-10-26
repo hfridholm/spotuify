@@ -8,7 +8,7 @@
 // pub mod home;
 // pub mod navbar;
 // pub mod player;
-// pub mod queue;
+pub mod queue;
 pub mod search;
 
 use super::{
@@ -21,14 +21,43 @@ pub(crate) fn parse_action(
   app_focus: AppFocus,
   action: InputAction,
 ) -> Option<AppAction> {
-  /*
+  match action {
+    InputAction::JumpDown => {
+      return Some(AppAction::Down);
+    }
+
+    InputAction::JumpUp => {
+      return Some(AppAction::Up);
+    }
+
+    InputAction::JumpLeft => {
+      return Some(AppAction::Left);
+    }
+
+    InputAction::JumpRight => {
+      return Some(AppAction::Right);
+    }
+
+    InputAction::JumpTop => {
+      return Some(AppAction::SetFocus { focus: AppFocus::Navbar })
+    }
+
+    InputAction::JumpBottom => {
+      return Some(AppAction::SetFocus { focus: AppFocus::Player })
+    }
+
+    _ => {}
+  }
+
   match app_focus {
     AppFocus::Navbar => {
-      navbar::parse_action(action)
+      // navbar::parse_action(action)
+      None
     }
 
     AppFocus::Player => {
-      player::parse_action(action)
+      // player::parse_action(action)
+      None
     }
 
     AppFocus::Queue => {
@@ -36,19 +65,23 @@ pub(crate) fn parse_action(
     }
 
     AppFocus::Home => {
-      home::parse_action(action)
+      // home::parse_action(action)
+      None
     }
 
     AppFocus::HomeHistory => {
-      home::history_parse_action(action)
+      // home::history_parse_action(action)
+      None
     }
 
     AppFocus::HomePlaylists => {
-      home::playlist_parse_action(action)
+      // home::playlist_parse_action(action)
+      None
     }
 
     AppFocus::Search => {
-      search::parse_action(action)
+      // search::parse_action(action)
+      None
     }
 
     AppFocus::SearchTrack => {
@@ -69,7 +102,4 @@ pub(crate) fn parse_action(
 
     _ => None
   }
-  */
-
-  None
 }

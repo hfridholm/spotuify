@@ -20,22 +20,6 @@ pub(crate) fn parse_key(
       Some(AppAction::PlayQueue)
     }
 
-    KeyCode::Down | KeyCode::Char('j') => {
-      Some(AppAction::QueueNext { count: 1 })
-    }
-
-    KeyCode::Up | KeyCode::Char('k') => {
-      Some(AppAction::QueuePrev { count: 1 })
-    }
-
-    KeyCode::Home => {
-      Some(AppAction::QueueFirst)
-    }
-
-    KeyCode::End => {
-      Some(AppAction::QueueLast)
-    }
-
     _ => None
   }
 }

@@ -147,12 +147,16 @@ impl App {
         }
       }
 
-      AppAction::ListNext { count: _, max } => {
-        self.list_index = self.list_index.saturating_add(1).min(max.saturating_sub(1));
+      AppAction::ListNext { count, max } => {
+        for _ in 0..count {
+          self.list_index = self.list_index.saturating_add(1).min(max.saturating_sub(1));
+        }
       }
 
-      AppAction::ListPrev { count: _ } => {
-        self.list_index = self.list_index.saturating_sub(1);
+      AppAction::ListPrev { count } => {
+        for _ in 0..count {
+          self.list_index = self.list_index.saturating_sub(1);
+        }
       }
 
       AppAction::PauseResume => {
@@ -191,12 +195,16 @@ impl App {
         self.spawn_repeat();
       }
 
-      AppAction::TableNext { count: _ } => {
-        self.table_state.select_next();
+      AppAction::TableNext { count } => {
+        for _ in 0..count {
+          self.table_state.select_next();
+        }
       }
 
-      AppAction::TablePrev { count: _ } => {
-        self.table_state.select_previous();
+      AppAction::TablePrev { count } => {
+        for _ in 0..count {
+          self.table_state.select_previous();
+        }
       }
 
       AppAction::TableFirst => {
@@ -207,12 +215,16 @@ impl App {
         self.table_state.select_last();
       }
 
-      AppAction::QueueNext { count: _ } => {
-        self.queue_state.select_next();
+      AppAction::QueueNext { count } => {
+        for _ in 0..count {
+          self.queue_state.select_next();
+        }
       }
 
-      AppAction::QueuePrev { count: _ } => {
-        self.queue_state.select_previous();
+      AppAction::QueuePrev { count } => {
+        for _ in 0..count {
+          self.queue_state.select_previous();
+        }
       }
 
       AppAction::QueueFirst => {
