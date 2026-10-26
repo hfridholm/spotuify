@@ -48,8 +48,9 @@ pub enum AppAction {
   ListNext { count: usize, max: usize },
   ListPrev { count: usize },
 
-  PauseResume,
-
+  PauseResume, // Remove, when parse_key got access to App
+  Resume,
+  Pause,
   Next,
   Prev,
 
@@ -165,6 +166,14 @@ impl App {
         } else {
           self.spawn_resume();
         }
+      }
+
+      AppAction::Resume => {
+        self.spawn_resume();
+      }
+
+      AppAction::Pause => {
+        self.spawn_pause();
       }
 
       AppAction::Next => {

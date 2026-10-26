@@ -317,7 +317,7 @@ impl App {
         self.mode = InputMode::Normal;
       }
       KeyCode::Enter => {
-        self.execute_command();
+        self.parse_command();
         self.command.clear();
         self.mode = InputMode::Normal;
       }
@@ -374,7 +374,23 @@ impl App {
     // Delete the previous character safely.
   }
 
-  fn execute_command(&mut self) {
-    // Execute commands such as :w or :q.
+  fn parse_command(&mut self) {
+    let tx = self.action_tx.clone();
+
+    if let Some(app_action) = match self.command.as_str() {
+      "q" | "quit" => Some(AppAction::Quit),
+
+      "next"   => Some(AppAction::Next),
+      "prev"   => Some(AppAction::Prev),
+      "resume" => Some(AppAction::Resume),
+      "pause"  => Some(AppAction::Pause),
+
+      _ => None
+    }
+    {
+      if tx.send(app_action).is_err() {
+        return;
+      }
+    }
   }
 }
