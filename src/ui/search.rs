@@ -8,6 +8,9 @@
 use super::{
   App,
   AppFocus,
+  BORDER_COLOR,
+  HEADER_COLOR,
+  BORDER_TYPE,
 };
 
 use ratatui::{
@@ -45,15 +48,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let in_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::Search,
       Err(_) => return,
-    };
-
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::Search {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
     };
 
     let [header_area, main_area] = Layout::vertical([
@@ -69,10 +66,10 @@ impl App {
         .left_aligned(),
       )
       .merge_borders(MergeStrategy::Exact)
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let input_area = header_block.inner(header_area);
@@ -88,7 +85,7 @@ impl App {
       .render(input_area, buf);
 
     // If focus is the main area, render header border on bottom
-    if app_focus != AppFocus::Search {
+    if !in_focus {
       header_block.clone().render(header_area, buf);
     }
 
@@ -101,7 +98,7 @@ impl App {
     }
     
     // If focus is the header, render header border on top
-    if app_focus == AppFocus::Search {
+    if in_focus {
       header_block.clone().render(header_area, buf);
     }
 
@@ -167,15 +164,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let in_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::SearchTrack,
       Err(_) => return,
-    };
-
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchTrack {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
     };
 
     let header = Row::new([
@@ -185,7 +176,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 
@@ -218,11 +209,11 @@ impl App {
     };
 
     let block = Block::bordered()
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let table = Table::new(rows, [
@@ -256,15 +247,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let in_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::SearchAlbum,
       Err(_) => return,
-    };
-
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchAlbum {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
     };
 
     let header = Row::new([
@@ -273,7 +258,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 
@@ -299,11 +284,11 @@ impl App {
     };
 
     let block = Block::bordered()
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let table = Table::new(rows, [
@@ -335,15 +320,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let in_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::SearchArtist,
       Err(_) => return,
-    };
-
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchArtist {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
     };
 
     let header = Row::new([
@@ -352,7 +331,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 
@@ -378,11 +357,11 @@ impl App {
     };
 
     let block = Block::bordered()
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let table = Table::new(rows, [
@@ -414,15 +393,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let in_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::SearchPlaylist,
       Err(_) => return,
-    };
-
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::SearchPlaylist {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
     };
 
     let header = Row::new([
@@ -431,7 +404,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 
@@ -459,11 +432,11 @@ impl App {
     };
 
     let block = Block::bordered()
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let table = Table::new(rows, [

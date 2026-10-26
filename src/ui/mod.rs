@@ -49,6 +49,56 @@ use ratatui::{
   Frame,
 };
 
+pub(crate) struct UiBorderType {
+  active:  BorderType,
+  passive: BorderType,
+}
+
+pub(crate) const BORDER_TYPE: UiBorderType = UiBorderType {
+  active:  BorderType::Thick,
+  passive: BorderType::Plain,
+};
+
+impl UiBorderType {
+  pub(crate) const fn get(&self, active: bool) -> BorderType {
+    if active {
+      self.active
+    } else {
+      self.passive
+    }
+  }
+}
+
+pub(crate) struct UiColor {
+  active:  Color,
+  passive: Color,
+}
+
+pub(crate) const BORDER_COLOR: UiColor = UiColor {
+  active: Color::Green,
+  passive: Color::DarkGray,
+};
+
+pub(crate) const TEXT_COLOR: UiColor = UiColor {
+  active: Color::White,
+  passive: Color::DarkGray,
+};
+
+pub(crate) const HEADER_COLOR: UiColor = UiColor {
+  active: Color::Yellow,
+  passive: Color::DarkGray,
+};
+
+impl UiColor {
+  pub(crate) const fn get(&self, active: bool) -> Color {
+    if active {
+      self.active
+    } else {
+      self.passive
+    }
+  }
+}
+
 impl App {
   pub(crate) fn draw(&mut self, frame: &mut Frame) {
     frame.render_widget(self, frame.area());
@@ -73,23 +123,6 @@ impl App {
       AppWindow::Playlist => self.render_playlist(area, buf),
     };
   }
-
-  pub(crate) fn panel(
-    title: &str,
-    color: Color,
-    border_type: BorderType,
-  ) -> Block<'static> {
-    Block::bordered()
-      .title(
-        Line::from(format!(" {title} ").bold())
-        .left_aligned(),
-      )
-      .border_type(border_type)
-      .border_style(
-        Style::default()
-        .fg(color),
-      )
-  }
 }
 
 // ============================================================================
@@ -110,7 +143,7 @@ impl Widget for &mut App {
     ] =
       Layout::vertical([
         Constraint::Min(5),
-        Constraint::Length(5),
+        Constraint::Length(6),
         Constraint::Length(2),
         Constraint::Length(1),
       ])

@@ -7,8 +7,12 @@
 
 use super::{
   App,
-  format_ms,
   AppFocus,
+  format_ms,
+  BORDER_COLOR,
+  HEADER_COLOR,
+  TEXT_COLOR,
+  BORDER_TYPE,
 };
 
 use ratatui::{
@@ -46,15 +50,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let is_focus = match self.focus.lock() {
+    let in_focus = match self.focus.lock() {
       Ok(app_focus) => *app_focus == AppFocus::Home,
       Err(_) => return,
-    };
-
-    let (block_color, header_color, border_type) = if is_focus {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
     };
 
     let [header_area, main_area] = Layout::vertical([
@@ -70,10 +68,10 @@ impl App {
         .left_aligned(),
       )
       .merge_borders(MergeStrategy::Exact)
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let inner_area = header_block.inner(header_area);
@@ -82,13 +80,13 @@ impl App {
       Line::from(format!("{}", self.user.display_name.to_string()))
     )
       .style(Style::default()
-        .fg(Color::White)
+        .fg(TEXT_COLOR.get(in_focus))
       )
       .centered()
       .render(inner_area, buf);
 
     // If focus is the main area, render header border on bottom
-    if !is_focus {
+    if !in_focus {
       header_block.clone().render(header_area, buf);
     }
 
@@ -99,7 +97,7 @@ impl App {
     }
     
     // If focus is the header, render header border on top
-    if is_focus {
+    if in_focus {
       header_block.clone().render(header_area, buf);
     }
 
@@ -163,15 +161,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let is_focus = match self.focus.lock() {
+    let in_focus = match self.focus.lock() {
       Ok(app_focus) => *app_focus == AppFocus::HomePlaylists,
       Err(_) => return,
-    };
-
-    let (block_color, header_color, border_type) = if is_focus {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
     };
 
     let header = Row::new([
@@ -181,7 +173,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 
@@ -211,11 +203,11 @@ impl App {
     };
 
     let block = Block::bordered()
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let table = Table::new(rows, [
@@ -249,23 +241,17 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let in_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::HomeHistory,
       Err(_) => return,
     };
 
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::HomeHistory {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
-    };
-
     let block = Block::bordered()
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       );
 
     let header = Row::new([
@@ -275,7 +261,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 

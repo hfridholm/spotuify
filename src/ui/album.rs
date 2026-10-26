@@ -7,7 +7,10 @@
 
 use super::{
   App,
-  AppFocus
+  AppFocus,
+  BORDER_COLOR,
+  HEADER_COLOR,
+  BORDER_TYPE,
 };
 
 use ratatui::{
@@ -38,7 +41,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let is_focus = match self.focus.lock() {
+    let in_focus = match self.focus.lock() {
       Ok(app_focus) => *app_focus == AppFocus::Album,
       Err(_) => return,
     };
@@ -48,17 +51,11 @@ impl App {
       None => return,
     };
 
-    let (block_color, header_color, border_type) = if is_focus {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
-    };
-
     let block = Block::bordered()
-      .border_type(border_type)
+      .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(block_color),
+        .fg(BORDER_COLOR.get(in_focus)),
       )
       .title(
         Line::from(format!(" {} ", album.name.to_string()).bold())
@@ -72,7 +69,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 

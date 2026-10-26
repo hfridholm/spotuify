@@ -9,6 +9,9 @@ use super::{
   App,
   AppFocus,
   AppWindow,
+  BORDER_COLOR,
+  HEADER_COLOR,
+  BORDER_TYPE,
 };
 
 use ratatui::{
@@ -37,15 +40,9 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(focus) => *focus,
+    let in_focus = match self.focus.lock() {
+      Ok(focus) => *focus == AppFocus::Navbar,
       Err(_) => return,
-    };
-
-    let (color, border_type) = if app_focus == AppFocus::Navbar {
-      (Color::Green, BorderType::Thick)
-    } else {
-      (Color::White, BorderType::Plain)
     };
 
     const TABS: [(AppWindow, &str); 2] = [
@@ -59,8 +56,8 @@ impl App {
     };
 
     let block = Block::bordered()
-      .border_type(border_type)
-      .border_style(Style::default().fg(color));
+      .border_type(BORDER_TYPE.get(in_focus))
+      .border_style(Style::default().fg(BORDER_COLOR.get(in_focus)));
 
     let inner = block.inner(area);
     block.render(area, buf);
@@ -83,7 +80,7 @@ impl App {
 
     for (i, (window, name)) in TABS.iter().enumerate() {
       // List selected item is only visable if navbar is in focus
-      let is_list_selected = i == self.list_index && app_focus == AppFocus::Navbar;
+      let is_list_selected = i == self.list_index && in_focus;
       let is_current_window = *window == app_window;
 
       let style = match (is_list_selected, is_current_window) {

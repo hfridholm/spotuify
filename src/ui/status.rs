@@ -8,6 +8,9 @@
 use super::{
   App,
   AppFocus,
+  BORDER_COLOR,
+  HEADER_COLOR,
+  BORDER_TYPE,
 };
 
 use crate::input::{

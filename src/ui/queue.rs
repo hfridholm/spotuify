@@ -9,12 +9,20 @@ use super::{
   App,
   AppFocus,
   format_ms,
+  BORDER_COLOR,
+  HEADER_COLOR,
+  TEXT_COLOR,
+  BORDER_TYPE,
 };
 
 use ratatui::{
   buffer::Buffer,
+  text::{
+    Line,
+  },
   widgets::{
     BorderType,
+    Block,
     Table,
     Row,
     Cell,
@@ -37,18 +45,21 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
+    let in_focus = match self.focus.lock() {
+      Ok(app_focus) => *app_focus == AppFocus::Queue,
       Err(_) => return,
     };
 
-    let (block_color, header_color, border_type) = if app_focus == AppFocus::Queue {
-      (Color::Green, Color::Yellow, BorderType::Thick)
-    } else {
-      (Color::White, Color::White, BorderType::Plain)
-    };
-
-    let block = Self::panel(" Queue ", block_color, border_type);
+    let block = Block::bordered()
+      .title(
+        Line::from(format!("  Queue  ").bold())
+        .left_aligned(),
+      )
+      .border_type(BORDER_TYPE.get(in_focus))
+      .border_style(
+        Style::default()
+        .fg(BORDER_COLOR.get(in_focus)),
+      );
 
     let header = Row::new([
       Cell::from(" #"),
@@ -57,7 +68,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(header_color),
+        .fg(HEADER_COLOR.get(in_focus)),
       )
       .bold();
 
@@ -116,11 +127,12 @@ impl App {
       .block(block)
       .style(
         Style::default()
-        .fg(Color::White),
+        .fg(TEXT_COLOR.get(in_focus))
       )
       .row_highlight_style(
         Style::default()
-        .bg(Color::Gray),
+        .bg(Color::Gray)
+        .fg(Color::Black)
       );
 
     StatefulWidget::render(
