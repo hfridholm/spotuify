@@ -5,14 +5,19 @@
  * |_| |_|\___/|_| |_| |_|\___|
  */
 
-use super::{
+use crate::app::{
   App,
   AppFocus,
+  AppWindow,
+};
+
+use super::{
   format_ms,
   BORDER_COLOR,
   HEADER_COLOR,
   TEXT_COLOR,
   BORDER_TYPE,
+  TAB_COLOR,
 };
 
 use ratatui::{
@@ -50,10 +55,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::Home,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::Home);
+    let in_window = app_focus.in_window(AppWindow::Home);
 
     let [header_area, main_area] = Layout::vertical([
       Constraint::Length(5),
@@ -71,7 +78,7 @@ impl App {
       .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let inner_area = header_block.inner(header_area);
@@ -80,7 +87,7 @@ impl App {
       Line::from(format!("{}", self.user.display_name.to_string()))
     )
       .style(Style::default()
-        .fg(TEXT_COLOR.get(in_focus))
+        .fg(TEXT_COLOR.get(in_focus, in_window))
       )
       .centered()
       .render(inner_area, buf);
@@ -121,12 +128,12 @@ impl App {
       (AppFocus::HomePlaylists, "Playlist"),
     ];
 
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
 
-    let selected = TABS.iter().position(|(focus, _)| *focus == app_focus);
+    let in_focus  = app_focus.is(AppFocus::Home);
+    let in_window = app_focus.in_window(AppWindow::Home);
 
     let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
       + (TABS.len() as u16 - 1) * 2 + 2;
@@ -142,15 +149,14 @@ impl App {
     let strings: [&_; TABS.len()] = std::array::from_fn(|i| TABS[i].1);
 
     Tabs::new(strings)
-      .select(selected)
+      .select(self.tab_index)
       .style(
         Style::default()
-        .fg(Color::Gray)
+        .fg(TAB_COLOR.get(false, in_window))
       )
       .highlight_style(
         Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD),
+        .fg(TAB_COLOR.get(true, in_window))
       )
       .divider("")
       .render(centered[1], buf);
@@ -161,10 +167,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::HomePlaylists,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::HomePlaylists);
+    let in_window = app_focus.in_window(AppWindow::Home);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -173,7 +181,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_window)),
       )
       .bold();
 
@@ -207,7 +215,7 @@ impl App {
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let table = Table::new(rows, [
@@ -241,17 +249,19 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::HomeHistory,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::HomeHistory);
+    let in_window = app_focus.in_window(AppWindow::Home);
 
     let block = Block::bordered()
       .border_type(BORDER_TYPE.get(in_focus))
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let header = Row::new([
@@ -261,7 +271,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_window)),
       )
       .bold();
 

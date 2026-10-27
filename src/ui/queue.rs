@@ -45,10 +45,11 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::Queue,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus = app_focus.is(AppFocus::Queue);
 
     let block = Block::bordered()
       .title(
@@ -58,7 +59,7 @@ impl App {
       .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_focus)),
       );
 
     let header = Row::new([
@@ -68,7 +69,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_focus)),
       )
       .bold();
 
@@ -127,7 +128,7 @@ impl App {
       .block(block)
       .style(
         Style::default()
-        .fg(TEXT_COLOR.get(in_focus))
+        .fg(TEXT_COLOR.get(in_focus, in_focus))
       )
       .row_highlight_style(
         Style::default()

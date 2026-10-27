@@ -5,12 +5,17 @@
  * |____/ \___|\__,_|_|  \___|_| |_|
  */
 
-use super::{
+use crate::app::{
   App,
   AppFocus,
+  AppWindow,
+};
+
+use super::{
   BORDER_COLOR,
   HEADER_COLOR,
   BORDER_TYPE,
+  TAB_COLOR,
 };
 
 use ratatui::{
@@ -48,10 +53,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::Search,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::Search);
+    let in_window = app_focus.in_window(AppWindow::Search);
 
     let [header_area, main_area] = Layout::vertical([
       Constraint::Length(3),
@@ -69,7 +76,7 @@ impl App {
       .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let input_area = header_block.inner(header_area);
@@ -78,7 +85,7 @@ impl App {
       Line::from(format!("{}", self.search_buffer))
     )
       .style(Style::default()
-        .bg(Color::Gray)
+        .bg(if in_focus { Color::Gray  } else { Color::DarkGray })
         .fg(Color::Black)
       )
       .left_aligned()
@@ -124,12 +131,14 @@ impl App {
       (AppFocus::SearchPlaylist, "Playlist"),
     ];
 
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
 
-    let selected = TABS.iter().position(|(focus, _)| *focus == app_focus);
+    let in_window = match self.window.lock() {
+      Ok(app_window) => *app_window == AppWindow::Search,
+      Err(_) => return,
+    };
 
     let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
       + (TABS.len() as u16 - 1) * 2 + 2;
@@ -145,15 +154,14 @@ impl App {
     let strings: [&_; TABS.len()] = std::array::from_fn(|i| TABS[i].1);
 
     Tabs::new(strings)
-      .select(selected)
+      .select(self.tab_index)
       .style(
         Style::default()
-        .fg(Color::Gray)
+        .fg(TAB_COLOR.get(false, in_window))
       )
       .highlight_style(
         Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD),
+        .fg(TAB_COLOR.get(true, in_window))
       )
       .divider("")
       .render(centered[1], buf);
@@ -164,10 +172,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::SearchTrack,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::SearchTrack);
+    let in_window = app_focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -176,7 +186,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_window)),
       )
       .bold();
 
@@ -213,7 +223,7 @@ impl App {
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let table = Table::new(rows, [
@@ -247,10 +257,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::SearchAlbum,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::SearchAlbum);
+    let in_window = app_focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -258,7 +270,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_window)),
       )
       .bold();
 
@@ -288,7 +300,7 @@ impl App {
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let table = Table::new(rows, [
@@ -320,10 +332,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::SearchArtist,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::SearchArtist);
+    let in_window = app_focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -331,7 +345,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_window)),
       )
       .bold();
 
@@ -361,7 +375,7 @@ impl App {
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let table = Table::new(rows, [
@@ -393,10 +407,12 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::SearchPlaylist,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus  = app_focus.is(AppFocus::SearchPlaylist);
+    let in_window = app_focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -404,7 +420,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_window)),
       )
       .bold();
 
@@ -436,7 +452,7 @@ impl App {
       .merge_borders(MergeStrategy::Exact)
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_window)),
       );
 
     let table = Table::new(rows, [

@@ -28,7 +28,7 @@ pub enum AppWindow {
 impl AppWindow {
   pub(crate) fn get_focus(&self) -> AppFocus {
     match self {
-      Self::Search   => AppFocus::SearchTrack,
+      Self::Search   => AppFocus::Search,
       Self::Home     => AppFocus::Home,
       Self::Track    => AppFocus::Track,
       Self::Artist   => AppFocus::Artist,
@@ -77,6 +77,14 @@ pub enum AppFocus {
 }
 
 impl AppFocus  {
+  pub(crate) fn is(&self, focus: AppFocus) -> bool {
+    *self == focus
+  }
+
+  pub(crate) fn in_window(&self, window: AppWindow) -> bool {
+    self.get_window() == Some(window)
+  }
+
   pub(crate) fn get_window(&self) -> Option<AppWindow> {
     match self {
       AppFocus::Search | AppFocus::SearchTrack | AppFocus::SearchArtist | AppFocus::SearchAlbum | AppFocus::SearchPlaylist => {
@@ -109,15 +117,21 @@ impl AppFocus  {
 }
 
 impl App {
+  pub(crate) fn get_focus(&self) -> Option<AppFocus> {
+    self.focus.lock().ok().map(|focus| *focus)
+  }
+
+  pub(crate) fn get_window(&self) -> Option<AppWindow> {
+    self.window.lock().ok().map(|window| *window)
+  }
+
   pub(crate) fn move_focus(&mut self, action: AppAction) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
 
-    let app_window = match self.window.lock() {
-      Ok(app_window) => *app_window,
-      Err(_) => return,
+    let Some(app_window) = self.get_window() else {
+      return;
     };
 
     let new_focus = match app_focus {
@@ -126,8 +140,8 @@ impl App {
           AppAction::Down => {
             match self.tab_index {
               0 => AppFocus::SearchTrack,
-              1 => AppFocus::SearchAlbum,
-              2 => AppFocus::SearchArtist,
+              1 => AppFocus::SearchArtist,
+              2 => AppFocus::SearchAlbum,
               3 => AppFocus::SearchPlaylist,
               _ => app_focus,
             }

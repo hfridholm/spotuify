@@ -70,31 +70,43 @@ impl UiBorderType {
 }
 
 pub(crate) struct UiColor {
-  active:  Color,
-  passive: Color,
+  in_focus:  Color,
+  in_window: Color,
+  other:     Color,
 }
 
+pub(crate) const TAB_COLOR: UiColor = UiColor {
+  in_focus:  Color::LightBlue,
+  in_window: Color::White,
+  other:     Color::DarkGray,
+};
+
 pub(crate) const BORDER_COLOR: UiColor = UiColor {
-  active: Color::Green,
-  passive: Color::DarkGray,
+  in_focus:  Color::Green,
+  in_window: Color::White,
+  other:     Color::DarkGray,
 };
 
 pub(crate) const TEXT_COLOR: UiColor = UiColor {
-  active: Color::White,
-  passive: Color::DarkGray,
+  in_focus:  Color::White,
+  in_window: Color::White,
+  other:     Color::DarkGray,
 };
 
 pub(crate) const HEADER_COLOR: UiColor = UiColor {
-  active: Color::Yellow,
-  passive: Color::DarkGray,
+  in_focus:  Color::Yellow,
+  in_window: Color::White,
+  other:     Color::DarkGray,
 };
 
 impl UiColor {
-  pub(crate) const fn get(&self, active: bool) -> Color {
-    if active {
-      self.active
+  pub(crate) const fn get(&self, in_focus: bool, in_window: bool) -> Color {
+    if in_window && in_focus {
+      self.in_focus
+    } else if in_window {
+      self.in_window
     } else {
-      self.passive
+      self.other
     }
   }
 }

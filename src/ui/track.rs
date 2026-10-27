@@ -42,26 +42,28 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::Track,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
 
-    let track = match &self.track {
-      Some(track) => track,
-      None => return,
+    let in_focus = app_focus.is(AppFocus::Track);
+
+    let Some(track) = &self.track else {
+      return;
     };
 
     let block = Block::bordered()
       .title(
         Line::from(format!(" {} ", track.name).bold())
         .left_aligned()
-        .style(Style::default().fg(HEADER_COLOR.get(in_focus)))
+        .style(Style::default()
+          .fg(HEADER_COLOR.get(in_focus, in_focus))
+        )
       )
       .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus))
+        .fg(BORDER_COLOR.get(in_focus, in_focus))
       );
 
     let artists =

@@ -31,9 +31,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
 
     let instructions = match app_focus {

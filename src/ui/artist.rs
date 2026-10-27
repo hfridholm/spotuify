@@ -35,26 +35,28 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::Artist,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
 
-    let artist = match &self.artist {
-      Some(artist) => artist,
-      None => return,
+    let in_focus = app_focus.is(AppFocus::Artist);
+
+    let Some(artist) = &self.artist else {
+      return;
     };
 
     let block = Block::bordered()
       .title(
         Line::from(format!(" {} ", artist.name).bold())
         .left_aligned()
-        .style(Style::default().fg(HEADER_COLOR.get(in_focus)))
+        .style(Style::default()
+          .fg(HEADER_COLOR.get(in_focus, in_focus))
+        )
       )
       .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus))
+        .fg(BORDER_COLOR.get(in_focus, in_focus))
       )
       .render(area, buf);
   }

@@ -12,6 +12,7 @@ use super::{
   BORDER_COLOR,
   HEADER_COLOR,
   BORDER_TYPE,
+  TAB_COLOR,
 };
 
 use ratatui::{
@@ -20,7 +21,8 @@ use ratatui::{
     Block,
     BorderType,
     Paragraph,
-    Widget
+    Widget,
+    Tabs,
   },
   style::{
     Color,
@@ -40,24 +42,22 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(focus) => *focus == AppFocus::Navbar,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
+
+    let in_focus = app_focus.is(AppFocus::Navbar);
 
     const TABS: [(AppWindow, &str); 2] = [
       (AppWindow::Home,   "Home"),
       (AppWindow::Search, "Search"),
     ];
 
-    let app_window = match self.window.lock() {
-      Ok(window) => *window,
-      Err(_) => AppWindow::Home,
-    };
-
     let block = Block::bordered()
       .border_type(BORDER_TYPE.get(in_focus))
-      .border_style(Style::default().fg(BORDER_COLOR.get(in_focus)));
+      .border_style(Style::default()
+        .fg(BORDER_COLOR.get(in_focus, in_focus))
+      );
 
     let inner = block.inner(area);
     block.render(area, buf);
@@ -76,47 +76,20 @@ impl App {
     ])
       .split(inner);
 
-    let mut x = centered[1].x;
+    // Creates tabs from every string TABS[i].1
+    let strings: [&_; TABS.len()] = std::array::from_fn(|i| TABS[i].1);
 
-    for (i, (window, name)) in TABS.iter().enumerate() {
-      // List selected item is only visable if navbar is in focus
-      let is_list_selected = i == self.list_index && in_focus;
-      let is_current_window = *window == app_window;
-
-      let style = match (is_list_selected, is_current_window) {
-        // Both states are active.
-        (true, true) => Style::default()
-          .fg(Color::White)
-          .bg(Color::Blue)
-          .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-
-        // Selected list item.
-        (true, false) => Style::default()
-          .fg(Color::White)
-          .bg(Color::Blue),
-
-        // Current application window.
-        (false, true) => Style::default()
-          .fg(Color::Cyan)
-          .add_modifier(Modifier::BOLD),
-
-        // Neither state is active.
-        (false, false) => Style::default()
-          .fg(Color::Gray),
-      };
-
-      let tab_area = Rect {
-        x,
-        y: centered[1].y,
-        width: name.len() as u16,
-        height: centered[1].height,
-      };
-
-      Paragraph::new(*name)
-        .style(style)
-        .render(tab_area, buf);
-
-      x += name.len() as u16 + 3;
-    }
+    Tabs::new(strings)
+      .select(self.list_index)
+      .style(
+        Style::default()
+        .fg(TAB_COLOR.get(false, in_focus))
+      )
+      .highlight_style(
+        Style::default()
+        .fg(TAB_COLOR.get(true, in_focus))
+      )
+      .divider("")
+      .render(centered[1], buf);
   }
 }

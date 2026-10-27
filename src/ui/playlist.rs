@@ -42,21 +42,21 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::Playlist,
-      Err(_) => return,
+    let Some(app_focus) = self.get_focus() else {
+      return;
     };
 
-    let playlist = match &self.playlist {
-      Some(playlist) => playlist,
-      None => return,
+    let in_focus = app_focus.is(AppFocus::Playlist);
+
+    let Some(playlist) = &self.playlist else {
+      return;
     };
 
     let block = Block::bordered()
       .border_type(BORDER_TYPE.get(in_focus))
       .border_style(
         Style::default()
-        .fg(BORDER_COLOR.get(in_focus)),
+        .fg(BORDER_COLOR.get(in_focus, in_focus)),
       )
       .title(
         Line::from(format!(" {} ", playlist.name.to_string()).bold())
@@ -70,7 +70,7 @@ impl App {
     ])
       .style(
         Style::default()
-        .fg(HEADER_COLOR.get(in_focus)),
+        .fg(HEADER_COLOR.get(in_focus, in_focus)),
       )
       .bold();
 
