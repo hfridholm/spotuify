@@ -55,12 +55,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::Home);
-    let in_window = app_focus.in_window(AppWindow::Home);
+    let in_focus  = self.focus.is(AppFocus::Home);
+    let in_window = self.focus.in_window(AppWindow::Home);
 
     let [header_area, main_area] = Layout::vertical([
       Constraint::Length(5),
@@ -128,12 +124,8 @@ impl App {
       (AppFocus::HomePlaylists, "Playlist"),
     ];
 
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::Home);
-    let in_window = app_focus.in_window(AppWindow::Home);
+    let in_focus  = self.focus.is(AppFocus::Home);
+    let in_window = self.focus.in_window(AppWindow::Home);
 
     let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
       + (TABS.len() as u16 - 1) * 2 + 2;
@@ -167,12 +159,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::HomePlaylists);
-    let in_window = app_focus.in_window(AppWindow::Home);
+    let in_focus  = self.focus.is(AppFocus::HomePlaylists);
+    let in_window = self.focus.in_window(AppWindow::Home);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -249,12 +237,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::HomeHistory);
-    let in_window = app_focus.in_window(AppWindow::Home);
+    let in_focus  = self.focus.is(AppFocus::HomeHistory);
+    let in_window = self.focus.in_window(AppWindow::Home);
 
     let block = Block::bordered()
       .border_type(BORDER_TYPE.get(in_focus))

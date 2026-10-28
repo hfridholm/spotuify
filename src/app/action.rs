@@ -18,6 +18,7 @@ use super::{
   App,
   AppWindow,
   AppFocus,
+  AppNotification,
 };
 
 use crossterm::event::{
@@ -34,6 +35,10 @@ pub enum AppAction {
 
   Initialize,
   Refresh,
+
+  AddError    { id: u64, error: String },
+  AddInfo     { id: u64, info: String },
+  RemoveNotification { id: u64 },
 
   KeyPress { key: KeyEvent },
 
@@ -103,7 +108,7 @@ pub enum AppAction {
   SetFocusAndTabIndex { focus: AppFocus, tab_index: usize },
 
   Error(String),
-  Message(String),
+  Info(String),
 }
 
 impl App {
@@ -127,6 +132,28 @@ impl App {
 
       AppAction::Initialize => {
         self.spawn_initialize();
+      }
+
+      AppAction::AddInfo { id, info } => {
+        self.notifications.push_back(AppNotification {
+          id,
+          text: info,
+          is_error: false,
+        });
+      }
+
+      AppAction::RemoveNotification { id } => {
+        self.notifications.retain(
+          |notification| notification.id != id
+        );
+      }
+
+      AppAction::AddError { id, error } => {
+        self.notifications.push_back(AppNotification {
+          id,
+          text: error,
+          is_error: true,
+        });
       }
 
       AppAction::Up | AppAction::Down | AppAction::Right | AppAction::Left => {
@@ -358,8 +385,8 @@ impl App {
         self.spawn_error(error);
       }
 
-      AppAction::Message(message) => {
-        self.spawn_message(message);
+      AppAction::Info(info) => {
+        self.spawn_info(info);
       }
 
       AppAction::SetWindow { window } => {

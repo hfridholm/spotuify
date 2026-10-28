@@ -25,7 +25,6 @@ use crate::app::{
 };
 
 use std::{
-  sync::{Arc, Mutex},
   time::Duration,
 };
 
@@ -332,14 +331,9 @@ impl App {
   }
 
   fn parse_key(&mut self, key: KeyEvent) {
-    let app_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus,
-      Err(_) => return,
-    };
-
     let tx = self.action_tx.clone();
 
-    if let Some(app_action) = key::parse_key(app_focus, key) {
+    if let Some(app_action) = key::parse_key(self.focus, key) {
       if tx.send(app_action).is_err() {
         return;
       }
@@ -350,7 +344,7 @@ impl App {
         InputStatus::Complete(input_action) => {
           self.input.clear();
 
-          if let Some(app_action) = action::parse_action(app_focus, input_action) {
+          if let Some(app_action) = action::parse_action(self.focus, input_action) {
             if tx.send(app_action).is_err() {
               return;
             }

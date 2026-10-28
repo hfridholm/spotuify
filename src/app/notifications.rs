@@ -12,36 +12,47 @@ use std::sync::{
 
 use tokio::time::{sleep, Duration};
 
-use super::App;
+use super::{
+  App,
+  AppAction,
+};
+
+pub struct AppNotification {
+  pub(crate) id:       u64,
+  pub(crate) is_error: bool,
+  pub(crate) text:     String,
+}
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl App {
   pub(crate) fn spawn_error(&self, error: String) {
-    let error_list = Arc::clone(&self.error_list);
-    
+    let tx = self.action_tx.clone();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
     tokio::spawn(async move {
-      error_list.lock().unwrap().push_back((id, error));
+      if tx.send(AppAction::AddError { id, error }).is_err() {
+        return;
+      }
 
       sleep(Duration::from_secs(5)).await;
 
-      error_list.lock().unwrap().retain(|(entry_id, _)| *entry_id != id);
+      let _ = tx.send(AppAction::RemoveNotification { id });
     });
   }
 
-  pub(crate) fn spawn_message(&self, message: String) {
-    let message_list = Arc::clone(&self.message_list);
-    
+  pub(crate) fn spawn_info(&self, info: String) {
+    let tx = self.action_tx.clone();
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
     tokio::spawn(async move {
-      message_list.lock().unwrap().push_back((id, message));
+      if tx.send(AppAction::AddInfo { id, info }).is_err() {
+        return;
+      }
 
-      sleep(Duration::from_secs(10)).await;
+      sleep(Duration::from_secs(5)).await;
 
-      message_list.lock().unwrap().retain(|(entry_id, _)| *entry_id != id);
+      let _ = tx.send(AppAction::RemoveNotification { id });
     });
   }
 }

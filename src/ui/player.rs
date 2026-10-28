@@ -55,10 +55,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let in_focus = match self.focus.lock() {
-      Ok(app_focus) => *app_focus == AppFocus::Player,
-      Err(_) => return,
-    };
+    let in_focus = self.focus.is(AppFocus::Player);
 
     let block = Block::bordered()
       .title(
@@ -143,11 +140,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus = app_focus.is(AppFocus::Player);
+    let in_focus = self.focus.is(AppFocus::Player);
 
     let color = if in_focus {
       Color::Green

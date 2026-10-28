@@ -53,12 +53,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::Search);
-    let in_window = app_focus.in_window(AppWindow::Search);
+    let in_focus  = self.focus.is(AppFocus::Search);
+    let in_window = self.focus.in_window(AppWindow::Search);
 
     let [header_area, main_area] = Layout::vertical([
       Constraint::Length(3),
@@ -131,14 +127,7 @@ impl App {
       (AppFocus::SearchPlaylist, "Playlist"),
     ];
 
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_window = match self.window.lock() {
-      Ok(app_window) => *app_window == AppWindow::Search,
-      Err(_) => return,
-    };
+    let in_window = self.window.is(AppWindow::Search);
 
     let width: u16 = TABS.iter().map(|t| t.1.len() as u16).sum::<u16>()
       + (TABS.len() as u16 - 1) * 2 + 2;
@@ -172,12 +161,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::SearchTrack);
-    let in_window = app_focus.in_window(AppWindow::Search);
+    let in_focus  = self.focus.is(AppFocus::SearchTrack);
+    let in_window = self.focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -257,12 +242,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::SearchAlbum);
-    let in_window = app_focus.in_window(AppWindow::Search);
+    let in_focus  = self.focus.is(AppFocus::SearchAlbum);
+    let in_window = self.focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -332,12 +313,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::SearchArtist);
-    let in_window = app_focus.in_window(AppWindow::Search);
+    let in_focus  = self.focus.is(AppFocus::SearchArtist);
+    let in_window = self.focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),
@@ -407,12 +384,8 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus  = app_focus.is(AppFocus::SearchPlaylist);
-    let in_window = app_focus.in_window(AppWindow::Search);
+    let in_focus  = self.focus.is(AppFocus::SearchPlaylist);
+    let in_window = self.focus.in_window(AppWindow::Search);
 
     let header = Row::new([
       Cell::from(" #"),

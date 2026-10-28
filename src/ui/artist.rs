@@ -35,11 +35,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus = app_focus.is(AppFocus::Artist);
+    let in_focus = self.focus.is(AppFocus::Artist);
 
     let Some(artist) = &self.artist else {
       return;

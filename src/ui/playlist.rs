@@ -42,11 +42,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus = app_focus.is(AppFocus::Playlist);
+    let in_focus = self.focus.is(AppFocus::Playlist);
 
     let Some(playlist) = &self.playlist else {
       return;

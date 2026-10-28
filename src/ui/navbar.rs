@@ -42,11 +42,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let in_focus = app_focus.is(AppFocus::Navbar);
+    let in_focus = self.focus.is(AppFocus::Navbar);
 
     const TABS: [(AppWindow, &str); 2] = [
       (AppWindow::Home,   "Home"),

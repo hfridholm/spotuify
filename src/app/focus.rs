@@ -26,6 +26,10 @@ pub enum AppWindow {
 }
 
 impl AppWindow {
+  pub(crate) fn is(&self, window: AppWindow) -> bool {
+    *self == window
+  }
+
   pub(crate) fn get_focus(&self) -> AppFocus {
     match self {
       Self::Search   => AppFocus::Search,
@@ -117,24 +121,8 @@ impl AppFocus  {
 }
 
 impl App {
-  pub(crate) fn get_focus(&self) -> Option<AppFocus> {
-    self.focus.lock().ok().map(|focus| *focus)
-  }
-
-  pub(crate) fn get_window(&self) -> Option<AppWindow> {
-    self.window.lock().ok().map(|window| *window)
-  }
-
   pub(crate) fn move_focus(&mut self, action: AppAction) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let Some(app_window) = self.get_window() else {
-      return;
-    };
-
-    let new_focus = match app_focus {
+    let new_focus = match self.focus {
       AppFocus::Search => {
         match action {
           AppAction::Down => {
@@ -143,12 +131,12 @@ impl App {
               1 => AppFocus::SearchArtist,
               2 => AppFocus::SearchAlbum,
               3 => AppFocus::SearchPlaylist,
-              _ => app_focus,
+              _ => self.focus,
             }
           },
           AppAction::Left => AppFocus::Queue,
           AppAction::Up   => AppFocus::Navbar,
-          _ => app_focus,
+          _ => self.focus,
         }
       },
 
@@ -157,7 +145,7 @@ impl App {
           AppAction::Up   => AppFocus::Search,
           AppAction::Down => AppFocus::Player,
           AppAction::Left => AppFocus::Queue,
-          _ => app_focus,
+          _ => self.focus,
         }
       },
 
@@ -166,7 +154,7 @@ impl App {
           AppAction::Up   => AppFocus::Navbar,
           AppAction::Down => AppFocus::Player,
           AppAction::Left => AppFocus::Queue,
-          _ => app_focus,
+          _ => self.focus,
         }
       },
 
@@ -176,12 +164,12 @@ impl App {
             match self.tab_index {
               0 => AppFocus::HomeHistory,
               1 => AppFocus::HomePlaylists,
-              _ => app_focus,
+              _ => self.focus,
             }
           },
           AppAction::Left => AppFocus::Queue,
           AppAction::Up   => AppFocus::Navbar,
-          _ => app_focus,
+          _ => self.focus,
         }
       },
 
@@ -190,54 +178,45 @@ impl App {
           AppAction::Up   => AppFocus::Home,
           AppAction::Down => AppFocus::Player,
           AppAction::Left => AppFocus::Queue,
-          _ => app_focus,
+          _ => self.focus,
         }
       },
 
       AppFocus::Player => {
         match action {
-          AppAction::Up => app_window.get_focus(),
-          _ => app_focus,
+          AppAction::Up => self.window.get_focus(),
+          _ => self.focus,
         }
       }
 
       AppFocus::Queue => {
         match action {
           AppAction::Down  => AppFocus::Player,
-          AppAction::Right => app_window.get_focus(),
-          _ => app_focus,
+          AppAction::Right => self.window.get_focus(),
+          _ => self.focus,
         }
       }
 
       AppFocus::Navbar => {
         match action {
           AppAction::Left => AppFocus::Queue,
-          AppAction::Down => app_window.get_focus(),
-          _ => app_focus,
+          AppAction::Down => self.window.get_focus(),
+          _ => self.focus,
         }
       }
 
-      _ => app_focus,
+      _ => self.focus,
     };
 
     self.set_focus(new_focus);
   }
 
   pub(crate) fn set_focus(&mut self, focus: AppFocus) {
-    match self.focus.lock() {
-      Ok(mut app_focus) => *app_focus = focus,
-      Err(_) => return,
-    };
-
-    let window = match self.window.lock() {
-      Ok(mut app_window) => Some(*app_window),
-      Err(_) => None,
-    };
+    self.focus = focus;
 
     // Update the window to belong to the current focus
-    if let Some(window) = window
-      && let Some(focus_window) = focus.get_window()
-      && focus_window != window
+    if let Some(focus_window) = focus.get_window()
+      && !focus_window.is(self.window)
     {
       self.set_window(focus_window);
     }
@@ -261,10 +240,7 @@ impl App {
   pub(crate) fn set_window(&mut self, window: AppWindow) {
     let tx = self.action_tx.clone();
 
-    match self.window.lock() {
-      Ok(mut app_window) => *app_window = window,
-      Err(_) => return,
-    };
+    self.window = window;
 
     // Let the window initialize itself
     match window {
@@ -274,16 +250,10 @@ impl App {
       _ => {}
     }
 
-    let focus = match self.focus.lock() {
-      Ok(mut app_focus) => Some(*app_focus),
-      Err(_) => None,
-    };
-
     // If the current focus is not in the window,
     // set focus to window's default focus and reset tab_index
-    if let Some(focus) = focus
-      && let Some(focus_window) = focus.get_window()
-      && focus_window != window
+    if let Some(focus_window) = self.focus.get_window()
+      && !focus_window.is(window)
     {
       self.set_focus(window.get_focus());
       self.tab_index = 0;

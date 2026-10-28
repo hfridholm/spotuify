@@ -6,6 +6,7 @@
  */
 
 use super::App;
+use crate::app::AppNotification;
 
 use ratatui::{
   buffer::Buffer,
@@ -30,43 +31,15 @@ use ratatui::{
 };
 
 impl App {
-  pub(crate) fn render_error_and_message(
+  pub(crate) fn render_notifications(
     &self,
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let error_list = match self.error_list.lock() {
-      Ok(error_list) => error_list,
-      Err(_) => return,
-    };
-
-    let message_list = match self.message_list.lock() {
-      Ok(message_list) => message_list,
-      Err(_) => return,
-    };
-
-    #[derive(PartialEq)]
-    enum InfoType {
-      Error,
-      Message,
-    }
-
-    let mut info_list: Vec<(InfoType, String)> = Vec::new();
-
-    info_list.extend(
-      error_list.iter().map(|(_, s)| (InfoType::Error, s.clone()))
-    );
-
-    info_list.extend(
-      message_list.iter().map(|(_, s)| (InfoType::Message, s.clone()))
-    );
-
     let mut y = area.y;
 
-    for (index, (info_type, text)) in info_list.iter().enumerate() {
-      let is_error = *info_type == InfoType::Error;
-
-      let text_width = text.len() as u16;
+    for (index, notification) in self.notifications.iter().enumerate() {
+      let text_width = notification.text.len() as u16;
 
       // +2 for left/right borders +2 padding
       let width = (text_width + 4).min(area.width);
@@ -90,7 +63,7 @@ impl App {
       // Clears rect from any previously rendered text
       Clear.render(rect, buf);
 
-      let block = if is_error {
+      let block = if notification.is_error {
         Block::bordered()
         .border_type(BorderType::Plain)
         .border_style(
@@ -106,15 +79,15 @@ impl App {
         )
       };
 
-      if is_error {
+      if notification.is_error {
         Paragraph::new(Text::from(vec![
           Line::from("Error".to_string().red()),
-          Line::from(text.as_str().bold().white()),
+          Line::from(notification.text.as_str().bold().white()),
         ]))
       } else {
         Paragraph::new(Text::from(vec![
           Line::from("Info".to_string().green()),
-          Line::from(text.as_str().bold().white()),
+          Line::from(notification.text.as_str().bold().white()),
         ]))
       }
         .centered()

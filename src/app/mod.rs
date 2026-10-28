@@ -13,6 +13,8 @@ mod notifications;
 mod spawn;
 
 pub use action::AppAction;
+pub use notifications::AppNotification;
+
 pub use focus::{
   AppFocus,
   AppWindow,
@@ -30,10 +32,7 @@ use crate::api::{
   Queue, Search, SimplifiedTracks, SpotifyApi, Track, User,
 };
 
-use std::{
-  collections::VecDeque,
-  sync::{Arc, Mutex},
-};
+use std::collections::VecDeque;
 
 use tokio::{
   sync::mpsc::{
@@ -55,8 +54,8 @@ pub struct App {
   pub(crate) spotify: SpotifyApi,
   pub(crate) last_player_update: std::time::Instant,
 
-  pub(crate) focus: Arc<Mutex<AppFocus>>,
-  pub(crate) window: Arc<Mutex<AppWindow>>,
+  pub(crate) focus:  AppFocus,
+  pub(crate) window: AppWindow,
 
   pub(crate) user: User,
   pub(crate) user_playlists: Playlists,
@@ -83,8 +82,7 @@ pub struct App {
 
   pub(crate) action_tx: UnboundedSender<AppAction>,
 
-  pub(crate) error_list: Arc<Mutex<VecDeque<(u64, String)>>>,
-  pub(crate) message_list: Arc<Mutex<VecDeque<(u64, String)>>>,
+  pub(crate) notifications: VecDeque<AppNotification>,
 
   pub(crate) input:   InputBuffer,
   pub(crate) mode:    InputMode,
@@ -101,8 +99,8 @@ impl App {
     Ok(Self {
       spotify: SpotifyApi::default(), // Maybe rename this to "api"
 
-      focus:  Arc::new(Mutex::new(AppFocus::Player)),
-      window: Arc::new(Mutex::new(AppWindow::Home)),
+      focus:  AppFocus::Player,
+      window: AppWindow::Home,
 
       user:           User::default(),
       user_playlists: Playlists::default(),
@@ -131,8 +129,7 @@ impl App {
 
       action_tx,
 
-      error_list:   Arc::new(Mutex::new(VecDeque::new())),
-      message_list: Arc::new(Mutex::new(VecDeque::new())),
+      notifications: VecDeque::new(),
 
       input: InputBuffer::default(),
       mode:  InputMode::Normal,

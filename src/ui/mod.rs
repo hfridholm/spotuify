@@ -121,12 +121,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let app_window = match self.window.lock() {
-      Ok(app_window) => *app_window,
-      Err(_) => return,
-    };
-
-    match app_window {
+    match self.window {
       AppWindow::Home     => self.render_home(area, buf),
       AppWindow::Search   => self.render_search(area, buf),
       AppWindow::Track    => self.render_track(area, buf),
@@ -180,7 +175,7 @@ impl Widget for &mut App {
       ])
       .areas(right_area);
 
-    let [ _, info_area ] = Layout::horizontal([
+    let [ _, notifications_area ] = Layout::horizontal([
         Constraint::Percentage(40),
         Constraint::Percentage(60),
       ])
@@ -216,8 +211,8 @@ impl Widget for &mut App {
       buf,
     );
 
-    self.render_error_and_message(
-      info_area,
+    self.render_notifications(
+      notifications_area,
       buf,
     );
   }

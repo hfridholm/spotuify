@@ -433,9 +433,8 @@ impl App {
     let player = self.player.clone();
     let tx = self.action_tx.clone();
 
-    // Create AppAction::Message
     let _ = tx.send(
-      AppAction::Message(format!("Playing: {}\nTrack Uri: {}\nAlbum Uri: {}", track.name.to_string(), track.uri.to_string(), track.album.name.to_string()))
+      AppAction::Info(format!("Playing: {}", track.name.to_string()))
     );
 
     tokio::spawn(async move {

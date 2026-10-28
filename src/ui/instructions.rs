@@ -31,11 +31,7 @@ impl App {
     area: Rect,
     buf: &mut Buffer,
   ) {
-    let Some(app_focus) = self.get_focus() else {
-      return;
-    };
-
-    let instructions = match app_focus {
+    let instructions = match self.focus {
       AppFocus::Player => {
         Line::from(
           "_ Pause/Resume | ↵ Refresh | h/← Previous | l/→ Next | ↑/↓ Volume | m Mute | s Shuffle | r Repeat",
